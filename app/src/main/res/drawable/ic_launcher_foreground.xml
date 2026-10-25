@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Launcher glyph: the capsule arrangement itself, not the ring.
+
+    A pill outline holding the two readings the module merges - rising signal
+    dots on the left, Wi-Fi arcs on the right - so the icon says "one capsule,
+    three icons" instead of repeating upstream's ring.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- The capsule shell: a horizontal pill, kept inside the adaptive safe zone. -->
+    <path
+        android:pathData="M35 43 H73 A11 11 0 0 1 73 65 H35 A11 11 0 0 1 35 43 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Signal dots, left half of the capsule: three rising levels. -->
+    <path
+        android:pathData="M37 56.6 A2 2 0 1 1 33 56.6 A2 2 0 1 1 37 56.6 Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M43 54.8 A2 2 0 1 1 39 54.8 A2 2 0 1 1 43 54.8 Z"
+        android:fillColor="#FFFFFFFF" />
+    <path
+        android:pathData="M49 53 A2 2 0 1 1 45 53 A2 2 0 1 1 49 53 Z"
+        android:fillColor="#FFFFFFFF" />
+
+    <!-- Wi-Fi arcs, right half: two arcs and the seat dot, same shapes as the status bar. -->
+    <path
+        android:pathData="M67.4 56 A2.6 2.6 0 0 1 72.6 56"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M64.6 56 A5.4 5.4 0 0 1 75.4 56"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M71.5 58 A1.5 1.5 0 1 1 68.5 58 A1.5 1.5 0 1 1 71.5 58 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

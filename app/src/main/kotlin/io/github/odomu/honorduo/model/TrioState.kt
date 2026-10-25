@@ -1,0 +1,1181 @@
+/*
+ * Copyright (C) 2026 yixing233 and HyperDuo contributors
+ * Copyright (C) 2026 odomu and HonorDuo contributors
+ *
+ * This file is part of HonorDuo, a fork of HyperDuo, released under the GNU
+ * General Public License v3.0. See the LICENSE file at the repository root, or
+ * <https://www.gnu.org/licenses/gpl-3.0.html>.
+ *
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+
+package io.github.odomu.honorduo.model
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.content.res.Resources
+import android.os.Build
+import android.os.SystemClock
+import android.telephony.SubscriptionInfo
+import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
+import android.view.View
+import androidx.core.content.ContextCompat
+import io.github.odomu.honorduo.hook.BatteryPresence
+import io.github.odomu.honorduo.hook.ClockTicker
+import io.github.odomu.honorduo.hook.FpsTicker
+import io.github.odomu.honorduo.hook.Refl
+import io.github.odomu.honorduo.hook.ScreenStateTracker
+import io.github.odomu.honorduo.hook.TrioHooks
+import io.github.odomu.honorduo.hook.WifiPresence
+import io.github.odomu.honorduo.hook.WeatherManager
+import io.github.odomu.honorduo.model.TrioState.Companion.SIMS_INTERVAL_MS
+import java.lang.reflect.Field
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Snapshot of everything the trio glyph needs: battery level and charge state,
+ * the Wi-Fi and mobile signal levels, and the ink MagicOS is drawing the status
+ * bar icons in.
+ *
+ * Every reading comes from a public field or method of the host, so nothing
+ * here guesses:
+ *
+ * - battery state from `HwBatteryManager`, the singleton
+ *   `HwStatusBarBatteryView.onBatteryUpdate` itself reads, so the glyph and the
+ *   native battery artwork can never disagree;
+ * - ink from the battery's border view (`BatteryTintView.mDefaultColor`), which is
+ *   the colour `HwStatusbarContents.refreshTint` last handed to the native
+ *   battery and therefore the colour the user is looking at;
+ * - Wi-Fi and mobile levels from the two `setIconForView` entry points, the one
+ *   call every signal icon on this ROM goes through;
+ * - per-SIM levels from telephony, because the icons name no SIM.
+ */
+internal class TrioState(val host: View) {
+
+    @JvmField
+    var level = -1
+
+    @JvmField
+    var charging = false
+
+    @JvmField
+    var quickCharging = false
+
+    @JvmField
+    var low = false
+
+    @JvmField
+    var powerSave = false
+
+    /** The ink this host's glyph is drawn with, resolved in [refresh]. */
+    @JvmField
+    var ink = 0
+
+    @JvmField
+    var wifiLevel = -1
+
+    /**
+     * The Wi-Fi level on the five-tier scale the reference glyph draws: 1..5 while
+     * connected, -1 otherwise. [wifiLevel] keeps the 0..4 system scale.
+     */
+    @JvmField
+    var wifiLevel5 = -1
+
+    /** The Wi-Fi generation (`WifiInfo.getWifiStandard`), or 0 when unknown. */
+    @JvmField
+    var wifiStandard = 0
+
+    /** Bluetooth earbud battery 0..100, or -1 when off / disconnected / unknown. */
+    @JvmField
+    var btBatteryLevel = -1
+
+    /** Wi-Fi traffic direction flags from the TrafficStats delta sampler. */
+    @JvmField
+    var wifiTrafficUp = false
+
+    @JvmField
+    var wifiTrafficDown = false
+
+    @JvmField
+    var mobileLevel = -1
+
+    @JvmField
+    var wifiPresent = true
+
+    @JvmField
+    var mobileType = ""
+
+    /** Pull-down morph progress, 0 collapsed .. 1 expanded; see [Prefs.KEY_TRIO_MORPH]. */
+    @JvmField
+    var morphFraction = 0f
+
+    /** Per-card types by slot, each falling back to [mobileType] when empty. */
+    @JvmField
+    var slotTypes: Array<String> = arrayOf("", "")
+
+    /** Per-SIM levels by slot; a fresh array each refresh, never mutated in place. */
+    @JvmField
+    var slotLevels = intArrayOf(-1, -1)
+
+    /** How many of [slotLevels] carry a reading. */
+    @JvmField
+    var sims = 0
+
+    /**
+     * Re-reads every status value from the host. Cheap enough to call in onDraw.
+     */
+    fun refresh() {
+        ensureHostFields(host.javaClass)
+        ensureManager(host.javaClass.classLoader)
+
+        val manager = manager()
+        if (manager != null && mgrLevel != null) {
+            level = Refl.getInt(mgrLevel, manager, level)
+            // mIsCharging 在部分 MagicOS 版本上只在插入后的充电提示窗口里为真，
+            // 5 秒后回落为 false，导致胶囊里的充电闪电随之消失；用电池广播的
+            // 「已接电/充电中/已充满」兜住，充电件就能一直画到拔线为止。
+            charging = Refl.getBool(mgrCharging, manager, charging) || sChargingAttached
+            powerSave = Refl.getBool(mgrPowerSave, manager, powerSave)
+            quickCharging = Refl.getBool(mgrQuick, manager, false) ||
+                    Refl.getBool(mgrSuperQuick, manager, false) ||
+                    Refl.getBool(mgrTurbo, manager, false)
+        } else {
+            level = Refl.getInt(hostLevel, host, level)
+            charging = Refl.getBool(hostCharging, host, charging) || sChargingAttached
+            powerSave = Refl.getBool(hostPowerSave, host, powerSave)
+        }
+        low = level >= 0 && level <= TrioConfig.appearance().lowThreshold
+
+        resolvePending(resourcesOf(host))
+
+        // One telephony poll is enough for every host, so it is rate-limited here rather than expressed as a background subscription no host owns.
+        if (TrioConfig.get().dualSim || TrioConfig.appearance().drawsAnySimRow() ||
+            TrioConfig.appearance().stackedOut() || TrioConfig.appearance().ownsType() ||
+            sMobileLevel < 0
+        ) {
+            sampleSimsIfDue()
+        }
+
+        wifiLevel = sWifiLevel
+        wifiLevel5 = sWifiLevel5
+        wifiStandard = sWifiStandard
+        btBatteryLevel = if (TrioConfig.get().trioBtBattery > 0) sBtBatteryLevel else -1
+        wifiTrafficUp = sWifiTrafficUp
+        wifiTrafficDown = sWifiTrafficDown
+        mobileLevel = sMobileLevel
+        wifiPresent = sWifiPresent
+        // 制式以电话读数（含关 5G 后的全局降级）为准。图标名会把「5G 可用」
+        // 直接报成 5G，关掉 5G 后也不回落——之前一直显示 5G 的真正原因。
+        // 只有该卡没有任何电话读数时才退回图标名。
+        val radioType = sSlotTypes.getOrNull(if (sDataSlot in 0 until SIM_SLOTS) sDataSlot else 0)
+            ?.takeIf { it.isNotEmpty() }
+            ?: sSlotTypes.firstOrNull { it.isNotEmpty() }
+        mobileType = radioType ?: sMobileType
+        morphFraction = TrioConfig.appearance().morphLive
+            .let { if (it) sMorphFraction else 0f }
+        val types = sSlotTypes
+        if (!slotTypes.contentEquals(types)) {
+            slotTypes = types.copyOf()
+        }
+
+        val slots = sSlotLevels
+        slotLevels[0] = slots[0]
+        slotLevels[1] = slots[1]
+        sims = (if (slots[0] >= 0) 1 else 0) + (if (slots[1] >= 0) 1 else 0)
+
+        // Single row, no answer from the icon chain: the row still means "the SIM
+        // that carries data", and the sampler resolved exactly which one that is.
+        if (mobileLevel < 0 && sDataSlot in 0 until SIM_SLOTS && slots[sDataSlot] >= 0) {
+            mobileLevel = slots[sDataSlot]
+        }
+
+        ink = resolveInk()
+    }
+
+    /**
+     * The battery's own `mTintColor` first, the border's `mDefaultColor` second.
+     *
+     * `HwStatusbarContents.refreshTint()` writes `mTintColor` unconditionally, while the
+     * `TintUtil.updateTintWithArea` pass that refreshes the border's tint list runs over
+     * the battery's children - and the battery is GONE here. Preferring the border made
+     * the glyph keep the previous background's ink across a light/dark switch until the
+     * border happened to be repainted.
+     */
+    private fun resolveInk(): Int {
+        val tint = Refl.getInt(hostTint, host, 0)
+        if (tint != 0) {
+            noteInk(tint, "mTintColor")
+            return tint
+        }
+        val border = Refl.get(hostBorder, host)
+        if (border != null) {
+            if (borderInk == null) borderInk = Refl.field(border.javaClass, "mDefaultColor")
+            val colour = Refl.getInt(borderInk, border, 0)
+            if (colour != 0) {
+                noteInk(colour, "border")
+                return colour
+            }
+        }
+        val fallback = if (nightMode()) WHITE else DEFAULT_FOREGROUND
+        noteInk(fallback, "fallback")
+        return fallback
+    }
+
+    /** Records the resolved ink once per change, so a device log can be read off. */
+    private fun noteInk(resolved: Int, source: String) {
+        if (!TrioHooks.debugLog()) return
+        val note = "ink: $source -> ${Integer.toHexString(resolved)}"
+        if (note == sLastInk) return
+        sLastInk = note
+        TrioHooks.log(TrioHooks.LOG_INFO, note)
+    }
+
+    /** The plain icon colour: what MagicOS would paint the battery icon in. */
+    fun foreground(): Int = if (ink != 0) ink else DEFAULT_FOREGROUND
+
+    private fun nightMode(): Boolean {
+        val context = appContext() ?: return false
+        return try {
+            val uiMode = context.resources.configuration.uiMode
+            uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    companion object {
+
+        /** Latest resolved signal levels; shared by every trio host. */
+        @Volatile
+        @JvmField
+        var sWifiLevel = -1
+
+        /**
+         * The Wi-Fi level on the glyph's five-tier scale: 1..5 while connected, -1
+         * otherwise. Sampled from the link's RSSI in [WifiPresence], not from the icon
+         * chain, so the five arcs are never coarser than the stock icon.
+         */
+        @Volatile
+        @JvmField
+        var sWifiLevel5 = -1
+
+        /** The link's Wi-Fi generation (`WifiInfo.getWifiStandard`), or 0 when unknown. */
+        @Volatile
+        @JvmField
+        var sWifiStandard = 0
+
+        /**
+         * The earbud battery level last reported by the Bluetooth controller hook,
+         * 0..100, or -1 while unknown. Written only by
+         * [io.github.odomu.honorduo.hook.BtBatteryHook].
+         */
+        @Volatile
+        @JvmField
+        var sBtBatteryLevel = -1
+
+        /** Wi-Fi traffic direction flags from [WifiPresence]'s TrafficStats sampler. */
+        @Volatile
+        @JvmField
+        var sWifiTrafficUp = false
+
+        @Volatile
+        @JvmField
+        var sWifiTrafficDown = false
+
+        /**
+         * Whether the notification or control panel is currently expanded.
+         *
+         * Written by [io.github.odomu.honorduo.hook.PanelExpansionHook]; read by the
+         * icon manager (panel native icons) and the morph driver.
+         */
+        @Volatile
+        @JvmField
+        var sPanelExpanded = false
+
+        /**
+         * The morph progress the glyph draws with, 0 collapsed .. 1 expanded.
+         *
+         * Written by [io.github.odomu.honorduo.hook.PanelExpansionHook] from the panel's
+         * own fraction channels, or by the debug slider when it is not -1.
+         */
+        @Volatile
+        @JvmField
+        var sMorphFraction = 0f
+
+        @Volatile
+        @JvmField
+        var sMobileLevel = -1
+
+        /**
+         * Whether the status bar is showing a Wi-Fi indicator at all.
+         *
+         * The level alone is not enough: the icon chain only reports a level
+         * while Wi-Fi is connected, so switching Wi-Fi off would leave the last
+         * level behind and the arcs would never disappear.
+         */
+        @Volatile
+        @JvmField
+        var sWifiPresent = true
+
+        /**
+         * Mobile network type as the status bar itself renders it: "5G", "5GA",
+         * "4G"... Empty when there is nothing to show.
+         */
+        @Volatile
+        @JvmField
+        var sMobileType = ""
+
+        /**
+         * Per-card types by slot.
+         *
+         * The icon hook sees each card's own type icon, and the card it sits in is the
+         * slot, so the two can be recorded together - one table, one source, per card
+         * rather than one value standing for both.
+         */
+        @Volatile
+        private var sSlotTypes = arrayOf("", "")
+
+        /**
+         * The clock string the capsule arrangement draws: "19:41", or "9:41" where
+         * the locale's own time format says so.
+         *
+         * Kept here rather than sampled in the renderer because the renderer
+         * also serves the settings preview, which must not tick.
+         */
+        @Volatile
+        @JvmField
+        var sClockText = ""
+
+        /** The date the settings preview stacks above its clock sample (preview only). */
+        @Volatile
+        @JvmField
+        var sClockDate = ""
+
+        /** The time the clock sheet's own sample draws; unlike [sClockText] it has seconds. */
+        @Volatile
+        @JvmField
+        var sClockBarText = ""
+        
+        @Volatile
+        @JvmField
+        var sClockWeekday = ""
+
+        @Volatile
+        @JvmField
+        var sClockLunar = ""
+        @Volatile
+        @JvmField
+        var sWeather = ""
+
+        @Volatile
+        @JvmField
+        var sDataActivity = 0
+
+        /**
+         * Joins the date and the weekday into the one line above the time.
+         *
+         * @return null when neither is on, which keeps the clock a single line.
+         */
+        @JvmStatic
+        fun clockDateLine(date: String?, weekday: String?): String? {
+            val d = date.orEmpty()
+            val w = weekday.orEmpty()
+            return when {
+                d.isEmpty() -> w.takeIf { it.isNotEmpty() }
+                w.isEmpty() -> d
+                else -> "$d $w"
+            }
+        }
+
+        /**
+         * Whether an external power source is attached at all.
+         *
+         * Not the same question as [charging]: at 100 % the platform stops
+         * pushing current, and a readout that vanished there would disappear
+         * exactly where a user looks for it.
+         */
+        @Volatile
+        @JvmField
+        var sChargingAttached = false
+
+        /** 插电后闪电保留的时长：与原生充电提示同一个 5 秒窗口。 */
+        private const val BOLT_PROMPT_MS = 5000L
+        private var sBoltWindowStart = 0L
+        private var sBoltWasCharging = false
+
+        /**
+         * 闪电是否还该出现：只在刚插上的 5 秒里画。
+         *
+         * 宿主原生的闪电同样是跟着充电提示出现 5 秒，之后只剩电量。之前用「已接电」
+         * 兜住之后闪电就一直挂着；这里用插电时刻给它一个窗口，拔线后窗口重置，
+         * 下次插电重新计时。
+         */
+        @JvmStatic
+        fun boltPromptShown(charging: Boolean): Boolean {
+            if (charging && !sBoltWasCharging) sBoltWindowStart = SystemClock.elapsedRealtime()
+            sBoltWasCharging = charging
+            return charging && SystemClock.elapsedRealtime() - sBoltWindowStart < BOLT_PROMPT_MS
+        }
+
+        /**
+         * 闪电窗口还剩多少毫秒；不在窗口里（没充、或 5 秒已过）返回 0。
+         *
+         * 给 GlyphView 约到点重绘用的：没有充电动画和呼吸填充时，插电后没有任何
+         * 东西推动重绘，闪电会一直挂到下一次状态变化才消失。
+         */
+        @JvmStatic
+        fun boltPromptRemainingMs(charging: Boolean): Long {
+            if (!charging || !sBoltWasCharging) return 0L
+            val left = BOLT_PROMPT_MS - (SystemClock.elapsedRealtime() - sBoltWindowStart)
+            return if (left > 0L) left else 0L
+        }
+
+        /**
+         * The power going into the battery, in watts, or [POWER_UNKNOWN] until a
+         * source answers. Defaults to "unknown" rather than 0: a module that never
+         * managed to read the current must not print "0.0W" as if it had.
+         */
+        @Volatile
+        @JvmField
+        var sChargePowerW = POWER_UNKNOWN
+
+        /** No temperature reading has arrived yet; draw nothing rather than "0". */
+        const val TEMP_UNKNOWN = Int.MIN_VALUE
+
+        /**
+         * The platform would not say how much power is going in; draw nothing
+         * rather than "0.0W". A NaN so that a comparison against it reads as "is a
+         * reading".
+         */
+        const val POWER_UNKNOWN = Float.NaN
+
+        /** The battery temperature in whole degrees Celsius, or [TEMP_UNKNOWN]. */
+        @Volatile
+        @JvmField
+        var sBatteryTempC = TEMP_UNKNOWN
+
+        /** The display's current refresh rate in whole hertz, or 0 before it is read. */
+        @Volatile
+        @JvmField
+        var sFps = 0
+
+        /** How many SIM slots the reading covers. */
+        const val SIM_SLOTS = 2
+
+        /** Signal level per slot, or -1 where that slot has no reading. */
+        @Volatile
+        @JvmField
+        var sSlotLevels = intArrayOf(-1, -1)
+
+        /**
+         * 卡槽里到底有没有卡。
+         *
+         * 和读数分开存：读数为 -1 只说明这一帧取不到信号，卡可能好端端在槽里。
+         * 把两者混成一件事，卡在但暂时读不到时整排点阵就会消失。
+         */
+        @Volatile
+        @JvmField
+        var sSlotPresent = booleanArrayOf(false, false)
+
+        /** The default-data SIM's slot, or -1 when unknown. */
+        @Volatile
+        @JvmField
+        var sDataSlot = -1
+
+        /** 是否已经成功读过一次卡槽：没读过之前不做「拔卡」判断，免得开机空白。 */
+        @Volatile
+        @JvmField
+        var sSlotPolled = false
+
+        /** 这个卡槽是否在读到的卡表里；还没读过时一律算在。 */
+        @JvmStatic
+        fun slotPresent(slot: Int): Boolean {
+            if (!sSlotPolled) return true
+            return sSlotPresent.getOrNull(slot) == true
+        }
+
+        private const val WHITE = 0xFFFFFFFF.toInt()
+        private const val DEFAULT_FOREGROUND = WHITE
+
+        private const val SIMS_INTERVAL_MS = 2_000L
+        private const val PENDING_MAX = 8
+
+        private const val C_IGNORE = -1
+        private const val C_CLEAR = -2
+        private const val C_TYPE = -3
+        private const val C_WIFI_BASE = 100
+
+        private val PENDING = ArrayList<Int>()
+        private val CLASSIFIED = ConcurrentHashMap<Int, Int>()
+
+        /**
+         * The application context, captured from the first hooked view.
+         *
+         * Held weakly on purpose: this object is a process-wide singleton inside
+         * SystemUI, and a strong `Context` field there is the leak the platform's own
+         * lint warns about. The application is alive for the whole process regardless,
+         * so the reference never actually clears in practice.
+         */
+        @Volatile
+        private var sContextRef: java.lang.ref.WeakReference<Context>? = null
+
+        private fun appContext(): Context? = sContextRef?.get()
+
+        @Volatile
+        private var sLastInk = ""
+
+        @Volatile
+        private var sSimsDueAt = 0L
+
+        // Battery manager (com.android.systemui.battery.HwBatteryManager).
+        private var mgrGetInstance: java.lang.reflect.Method? = null
+        private var mgrLevel: Field? = null
+        private var mgrCharging: Field? = null
+        private var mgrPowerSave: Field? = null
+        private var mgrQuick: Field? = null
+        private var mgrSuperQuick: Field? = null
+        private var mgrTurbo: Field? = null
+        private var mgrTried = false
+
+        // Host fields, used when the singleton cannot be reached.
+        private var hostLevel: Field? = null
+        private var hostCharging: Field? = null
+        private var hostPowerSave: Field? = null
+        private var hostTint: Field? = null
+        private var hostBorder: Field? = null
+        private var borderInk: Field? = null
+        private var hostFieldsReady = false
+
+        /**
+         * Captures the context telephony needs, from a view the module already has.
+         *
+         * SystemUI is `android.uid.systemui` with READ_PRIVILEGED_PHONE_STATE,
+         * and this module runs inside it, so the framework answers these calls
+         * without the module's own manifest asking for anything.
+         */
+        @JvmStatic
+        fun attachContext(context: Context?) {
+            if (context == null || sContextRef != null) return
+            try {
+                val app = context.applicationContext ?: context
+                sContextRef = java.lang.ref.WeakReference(app)
+                WifiPresence.start(app)
+                // The battery broadcast is not routed through the hooked views, so
+                // it needs a receiver of its own.
+                BatteryPresence.start(app)
+                // The one reading with no event behind it: the clock is correct
+                // until the minute rolls over, so it has to wake itself up.
+                ClockTicker.start(app)
+                WeatherManager.start(app)
+                // The one reading with no event behind it either: the panel's refresh rate
+                // moves on its own schedule, so it is sampled rather than pushed. The
+                // ticker reports through this callback, so it never has to know what a new
+                // rate repaints.
+                FpsTicker.onSample = { fps ->
+                    sFps = fps
+                    TrioHooks.invalidateHosts()
+                }
+                FpsTicker.start(app)
+                startDataActivityListener(app)
+                startDataActivitySampler(app)
+            } catch (_: Throwable) {
+                // Leave it null; the reading stays on the single-row fallback.
+            }
+        }
+
+        /**
+         * Records a signal icon resource id - the id every signal icon on this ROM
+         * is applied through.
+         *
+         * Names look like `stat_sys_signal_five_3_small` (the five-bar layout),
+         * `stat_sys_signal_3` (four-bar), `stat_sys_wifi_signal_2` or
+         * `stat_sys_data_connected_5g` (the network type). Ids seen before a
+         * Resources handle exists are buffered and resolved on the next draw.
+         */
+        @JvmStatic
+        fun noteSignalIcon(res: Resources?, resId: Int) {
+            if (resId == 0) return
+            if (res == null) {
+                synchronized(PENDING) {
+                    if (PENDING.size >= PENDING_MAX) PENDING.removeAt(0)
+                    PENDING.add(resId)
+                }
+                return
+            }
+            absorb(res, resId)
+        }
+
+        /** Records Wi-Fi presence and reports whether it changed. */
+        @JvmStatic
+        fun setWifiPresent(present: Boolean): Boolean {
+            val resolved = WifiPresence.resolve(present, -1)
+            if (sWifiPresent == resolved) return false
+            sWifiPresent = resolved
+            return true
+        }
+
+        /**
+         * Records one card's type. Empty clears it.
+         *
+         * @param fromIcon `true` when the label was read off the card's own type icon,
+         *   `false` when telephony reported it. Telephony decides the family and the
+         *   icon may only refine it: Honor draws `stat_sys_data_connected_5g_cust_available`
+         *   on an LTE cell whose carrier merely advertises NR as available, and taking
+         *   that name at face value claimed a 5G network the card was not on. An icon
+         *   whose family agrees with the radio still wins, which is what keeps "5GA"
+         *   and "4G+" - refinements the radio has no word for.
+         */
+        @JvmStatic
+        fun setSlotType(slot: Int, type: String?, fromIcon: Boolean = true) {
+            if (slot !in 0 until SIM_SLOTS) return
+            val next = type ?: ""
+            var resolved = next
+            if (fromIcon) {
+                val radio = sRadioTypes[slot]
+                // 图标与无线电不同族时：只有图标代际更低（关 5G 后无线电仍报 NSA 5G）
+                // 才采纳，这是要修的降级；图标更高则仍是 honor 的 5G「可用」宣传图标。
+                if (radio.isNotEmpty() && !next.startsWith(radio) &&
+                    generation(next) >= generation(radio)
+                ) return
+                val icons = sIconTypes.copyOf()
+                icons[slot] = next
+                sIconTypes = icons
+            } else {
+                val radios = sRadioTypes.copyOf()
+                radios[slot] = next
+                sRadioTypes = radios
+                // 无线电是家族的最终答案（已含关 5G 后的全局降级）：只要它报了
+                // 一句，就以它为准；此前图标报过更高的 5G 也不再压住这个 4G。
+                // 无线电没读数时才退回图标读数。
+                if (next.isEmpty()) {
+                    resolved = sIconTypes[slot]
+                }
+            }
+            if (resolved.isEmpty()) {
+                if (sSlotTypes[slot].isEmpty()) return
+            } else if (sSlotTypes[slot] == resolved) {
+                return
+            }
+            val copy = sSlotTypes.copyOf()
+            copy[slot] = resolved
+            sSlotTypes = copy
+        }
+
+        /**
+         * What telephony last said about each card's family.
+         *
+         * Kept beside the published labels so the icon path can be checked against it:
+         * the icon is the refinement, the radio is the answer.
+         */
+        private var sRadioTypes = arrayOf("", "")
+
+        /**
+         * What each card's native type icon last said, per slot.
+         *
+         * 原生图标是用户眼前实际看到的制式，一旦有答案就以它为准；为空表示这一格
+         * 还没有图标读数，此时才让无线电上报的制式顶上。
+         */
+        private var sIconTypes = arrayOf("", "")
+
+        /** 制式所属代际：5=5G 家族，4=4G，3=3G，2=2G，1=1X，0=未知。 */
+        private fun generation(type: String): Int = when {
+            type.isEmpty() -> 0
+            type.startsWith("5") -> 5
+            type.startsWith("4") -> 4
+            type.startsWith("3") || type.startsWith("H") -> 3
+            type.startsWith("2") || type == "E" || type == "G" -> 2
+            type.startsWith("1") -> 1
+            else -> 0
+        }
+
+        /** The type an icon id names, or null when it names none. Cached per id. */
+        @JvmStatic
+        fun typeOfIcon(res: Resources?, resId: Int): String? {
+            if (res == null || resId <= 0) return null
+            synchronized(TYPE_NAMES) {
+                if (TYPE_NAMES.containsKey(resId)) {
+                    return TYPE_NAMES[resId]?.ifEmpty { null }
+                }
+                val name = runCatching { res.getResourceEntryName(resId) }.getOrNull()
+                val type = name?.let { typeOfName(it) }
+                TYPE_NAMES[resId] = type ?: ""
+                return type?.ifEmpty { null }
+            }
+        }
+
+        /** Resource ids already classified as a type label; "" is "not a type". */
+        private val TYPE_NAMES = HashMap<Int, String>()
+
+        /** Records the network type label and reports whether it changed. */
+        @JvmStatic
+        fun setMobileType(type: String?): Boolean {
+            val next = type ?: ""
+            if (next == sMobileType) return false
+            sMobileType = next
+            return true
+        }
+
+        /**
+         * Re-reads the per-SIM levels right away and reports whether anything moved.
+         *
+         * Called from the signal-icon hook, which is an event-driven refresh
+         * rather than a per-frame one, so the frame-rate guard is not what protects
+         * that path.
+         */
+        @JvmStatic
+        fun pollSimsNow(): Boolean {
+            val context = appContext() ?: return false
+            val before = sSlotLevels
+            val beforeData = sDataSlot
+            sampleSims(context)
+            val after = sSlotLevels
+            return beforeData != sDataSlot || before[0] != after[0] || before[1] != after[1]
+        }
+
+        private fun ensureManager(cl: ClassLoader?) {
+            if (mgrTried) return
+            mgrTried = true
+            val c =
+                Refl.cls("com.android.systemui.battery.HwBatteryManager", cl ?: return) ?: return
+            mgrGetInstance = Refl.method(c, "getInstance")
+            mgrLevel = Refl.field(c, "mLevel")
+            mgrCharging = Refl.field(c, "mIsCharging")
+            mgrPowerSave = Refl.field(c, "mIsPowerSave")
+            mgrQuick = Refl.field(c, "mIsQuickStatus")
+            mgrSuperQuick = Refl.field(c, "mIsSuperQuickStatus")
+            mgrTurbo = Refl.field(c, "mIsTurboCharging")
+        }
+
+        /**
+         * The battery-manager singleton.
+         *
+         * `HwBatteryManager.getInstance()` is the object
+         * `HwStatusBarBatteryView.onBatteryUpdate` reads its state from, so a glyph
+         * fed from the same object cannot show a level the native battery
+         * disagrees with.
+         */
+        private fun manager(): Any? = Refl.invoke(mgrGetInstance, Unit)
+
+        private fun ensureHostFields(c: Class<*>) {
+            if (hostFieldsReady) return
+            hostLevel = Refl.field(c, "mLevel")
+            hostCharging = Refl.field(c, "mIsCharging")
+            hostPowerSave = Refl.field(c, "mIsPowerSave")
+            hostTint = Refl.field(c, "mTintColor")
+            hostBorder = Refl.field(c, "mBorderView")
+            hostFieldsReady = hostLevel != null
+        }
+
+        private fun resourcesOf(v: View): Resources? = try {
+            v.resources
+        } catch (_: Throwable) {
+            null
+        }
+
+        /**
+         * Re-reads the per-SIM levels at most once every [SIMS_INTERVAL_MS].
+         *
+         * Called from [refresh], which runs in onDraw: the guard is what keeps a
+         * per-frame call from becoming a per-frame IPC.
+         */
+        private fun sampleSimsIfDue() {
+            if (!ScreenStateTracker.isScreenOn) return
+            val now = SystemClock.elapsedRealtime()
+            if (now < sSimsDueAt) return
+            sSimsDueAt = now + SIMS_INTERVAL_MS
+            sampleSims(appContext())
+        }
+
+        /**
+         * Reads one signal level per SIM slot straight from telephony.
+         *
+         * Why not the icons: `setIconForView` names neither a SIM nor a slot, so
+         * the icons cannot say which SIM a level belongs to. The framework can, and
+         * [SubscriptionInfo] is the one place that maps a subscription to its slot.
+         *
+         * Every step is defensive: a missing permission or a dead radio leaves that slot
+         * at -1 and the caller falls back to a single row.
+         */
+        private fun sampleSims(source: Context?) {
+            val context = source ?: return
+            if (ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.READ_PHONE_STATE,
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            val levels = intArrayOf(-1, -1)
+            val present = booleanArrayOf(false, false)
+            var dataSlot = -1
+            try {
+                val subs = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
+                        as? SubscriptionManager
+                val tel = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                if (subs == null || tel == null) return
+                // 卡表读不到（没权限/服务异常）就整帧不发布：否则一次失败会把两个卡槽
+                // 都记成「没卡」，点阵从此不显示。
+                val active = subs.activeSubscriptionInfoList ?: return
+                val dataSubId = SubscriptionManager.getDefaultDataSubscriptionId()
+                active.forEach { info ->
+                    val subId = info.subscriptionId
+                    val slot = info.simSlotIndex
+                    if (subId == dataSubId) dataSlot = slot
+                    if (slot in 0 until SIM_SLOTS) {
+                        present[slot] = true
+                        levels[slot] = levelOf(tel, subId)
+                        // The radio decides the family; the icon only refines it, and is replaced when stale.
+                        // The ROM's own per-slot answer first: it already folded in the
+                        // NSA override, and it is the value its icon was chosen from.
+                        // 制式以「无线电实际上报」为准：手机设置里关掉 5G 后，ROM 的
+                        // per-slot 表可能仍留着 NR（NSA 锚点/未及时刷新），继续信它就会
+                        // 一直画 5G。dataNetworkType 为 UNKNOWN 时 typeOf 内部已回退
+                        // networkType，保证关 5G 能落到 4G；ROM 表只在取不到时兜底。
+                        val radio = typeOf(tel, subId) ?: romSlotType(slot, subId)
+                        if (radio != null) {
+                            setSlotType(slot, radio, fromIcon = false)
+                        }
+                    }
+                }
+                // The aggregate reading comes from the data subscription rather than from
+                // the icon that happens to carry it.
+                if (dataSlot in 0 until SIM_SLOTS && levels[dataSlot] >= 0) {
+                    sMobileLevel = levels[dataSlot]
+                }
+            } catch (_: Throwable) {
+                // keep whatever the previous poll found.
+                return
+            }
+            // Published only once the whole reading is consistent, so a frame never
+            // pairs SIM 1's level with SIM 2's from a different poll.
+            sSlotLevels = levels
+            sSlotPresent = present
+            sDataSlot = dataSlot
+            sSlotPolled = true
+        }
+
+        /**
+         * The 0..4 level the bar draws for one subscription, or -1.
+         *
+         * AOSP's `SignalStrength.getLevel()` answers 0..4 on every level count,
+         * including MagicOS' five-bar layout, so it is the one reading that matches
+         * the dot row regardless of how many bars the ROM draws.
+         */
+        /**
+         * The network type of one subscription, in the module's own label vocabulary.
+         *
+         * Empty for an unknown or absent radio; the caller keeps whatever the icon
+         * reported in that case.
+         */
+        /**
+         * The network type the ROM itself is showing for one slot, or null.
+         *
+         * `HwSignalUtil.sCurrentNetWorkTypes[slot]` is the table SystemUI fills in
+         * `HwMobileSignalController.notifyListeners` from `TelephonyDisplayInfo`, and
+         * every per-card type icon is derived from it. Reading the same table means the
+         * module cannot disagree with the bar about what a card is on - including the NSA
+         * override, which `TelephonyManager.dataNetworkType` does not carry.
+         *
+         * @return the module's own label, or null when the ROM has not written that slot
+         */
+        private fun romSlotType(slot: Int, subId: Int): String? {
+            val table = romTypeTable() ?: return null
+            val perSlot = table.getOrNull(slot) as? Map<*, *> ?: return null
+            val raw = perSlot[subId] as? Number ?: return null
+            return labelOfNetworkType(raw.toInt())
+        }
+
+        /** The ROM's per-slot type table, resolved once. */
+        private fun romTypeTable(): Array<*>? {
+            if (romTried) return romTypes
+            romTried = true
+            romTypes = try {
+                val loader = appContext()?.classLoader ?: return null
+                val c = Refl.cls("com.android.systemui.utils.HwSignalUtil", loader)
+                Refl.field(c, "sCurrentNetWorkTypes")?.get(null) as? Array<*>
+            } catch (_: Throwable) {
+                null
+            }
+            return romTypes
+        }
+
+        private var romTried = false
+        private var romTypes: Array<*>? = null
+
+        /**
+         * The module's label for a raw `TelephonyManager` network type.
+         *
+         * The same families the status bar's own icons use: 20 is NR and is also what
+         * the ROM stores for an NSA override, 19 is LTE carrier aggregation, which Honor
+         * draws as "4G+".
+         */
+        private fun labelOfNetworkType(type: Int): String? = when (type) {
+            20 -> "5G"
+            19 -> "4G+"
+            13, 14 -> "4G"
+            3, 5, 6, 8, 9, 10, 12, 15, 17 -> "3G"
+            1, 2, 4, 7, 11, 16 -> "2G"
+            else -> null
+        }
+
+        private fun typeOf(tel: TelephonyManager, subId: Int): String? = try {
+            val sub = tel.createForSubscriptionId(subId) ?: return null
+            // dataNetworkType can keep reporting UNKNOWN for a while after 5G is
+            // switched off on some builds; the deprecated networkType still
+            // answers there, so it is the fallback rather than losing the type.
+            val dnt = sub.dataNetworkType
+            @Suppress("DEPRECATION")
+            val legacy = sub.networkType
+            // 关掉 5G 后 per-sub 仍可能报 NR（NSA 锚点残留），而数据卡上的全局读数
+            // 已经落到 LTE。全局读数与 bar 的做法一致：只要它明确不是 NR，
+            // 任何一格报上来的 NR 都是残留，按全局降级。
+            val global = try {
+                tel.dataNetworkType
+            } catch (_: Throwable) {
+                TelephonyManager.NETWORK_TYPE_UNKNOWN
+            }
+            val raw = when {
+                dnt == TelephonyManager.NETWORK_TYPE_NR &&
+                    global != TelephonyManager.NETWORK_TYPE_UNKNOWN &&
+                    global != TelephonyManager.NETWORK_TYPE_NR -> global
+                dnt != TelephonyManager.NETWORK_TYPE_UNKNOWN -> dnt
+                global != TelephonyManager.NETWORK_TYPE_UNKNOWN -> global
+                else -> legacy
+            }
+            when (raw) {
+                TelephonyManager.NETWORK_TYPE_NR -> "5G"
+                TelephonyManager.NETWORK_TYPE_LTE -> "4G"
+                TelephonyManager.NETWORK_TYPE_HSPAP,
+                TelephonyManager.NETWORK_TYPE_HSDPA,
+                TelephonyManager.NETWORK_TYPE_HSUPA,
+                TelephonyManager.NETWORK_TYPE_UMTS,
+                -> "3G"
+                TelephonyManager.NETWORK_TYPE_EDGE,
+                TelephonyManager.NETWORK_TYPE_GPRS,
+                TelephonyManager.NETWORK_TYPE_GSM,
+                -> "2G"
+                else -> null
+            }
+        } catch (_: SecurityException) {
+            // READ_PHONE_STATE can be revoked while the process lives; the icon-borne
+            // label (when there is one) is still on screen, so fall through to it.
+            null
+        } catch (_: Throwable) {
+            null
+        }
+
+        private fun levelOf(tel: TelephonyManager, subId: Int): Int = try {
+            tel.createForSubscriptionId(subId)?.signalStrength?.level?.takeIf { it in 0..4 } ?: -1
+        } catch (_: Throwable) {
+            -1
+        }
+
+        private var sDataActivityStarted = false
+        private var sDataActivitySampler = false
+
+        /**
+         * Polls the modem's data-activity counter.
+         *
+         * The telephony callback is the precise source, but on this ROM it is delivered
+         * to the default subscription only and silently stops when the data SIM changes
+         * or a privileged listener is refused - which showed up as arrows that never lit.
+         * This one-second poll is the fallback: cheap, and it keeps the state honest even
+         * when the callback never arrives.
+         */
+        private fun startDataActivitySampler(context: Context) {
+            if (sDataActivitySampler) return
+            val tm = context.getSystemService(TelephonyManager::class.java) ?: return
+            // 反射方法只查一次：原来每秒 getMethod 一次，是熄屏空转时的固定开销。
+            val method = try {
+                tm.javaClass.getMethod("getDataActivity")
+            } catch (_: Throwable) {
+                null
+            } ?: return
+            sDataActivitySampler = true
+            val main = android.os.Handler(android.os.Looper.getMainLooper())
+            val tick = object : Runnable {
+                override fun run() {
+                    // 熄屏停摆，亮屏后由外部重新拉起。流量箭头现在是可放置的组件，
+                    // 不再由旧开关决定是否采样，所以这里只按屏幕状态判断。
+                    if (!ScreenStateTracker.isScreenOn) {
+                        sDataActivitySampler = false
+                        return
+                    }
+                    try {
+                        val direction = (method.invoke(tm) as? Number)?.toInt() ?: 0
+                        if (sDataActivity != direction) {
+                            sDataActivity = direction
+                            TrioHooks.invalidateHosts()
+                        }
+                    } catch (_: Throwable) {
+                        // Hidden on some builds; the callback above still covers those.
+                    }
+                    main.postDelayed(this, DATA_ACTIVITY_POLL_MS)
+                }
+            }
+            main.postDelayed(tick, DATA_ACTIVITY_POLL_MS)
+        }
+
+        /** 亮屏或打开流量箭头后重新拉起轮询（幂等）。 */
+        @JvmStatic
+        fun ensureDataActivitySampler() {
+            val ctx = appContext() ?: return
+            try {
+                startDataActivitySampler(ctx)
+            } catch (_: Throwable) {
+            }
+        }
+
+        private const val DATA_ACTIVITY_POLL_MS = 1000L
+
+        private fun startDataActivityListener(context: Context) {
+            if (sDataActivityStarted) return
+            try {
+                val tm = context.getSystemService(TelephonyManager::class.java) ?: return
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val executor = context.mainExecutor
+                    tm.registerTelephonyCallback(
+                        executor,
+                        object : android.telephony.TelephonyCallback(),
+                            android.telephony.TelephonyCallback.DataActivityListener {
+                            override fun onDataActivity(direction: Int) {
+                                if (sDataActivity != direction) {
+                                    sDataActivity = direction
+                                    TrioHooks.invalidateHosts()
+                                }
+                            }
+                        }
+                    )
+                    sDataActivityStarted = true
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        private fun resolvePending(res: Resources?) {
+            if (res == null) return
+            synchronized(PENDING) {
+                if (PENDING.isEmpty()) return
+                PENDING.forEach { absorb(res, it) }
+                PENDING.clear()
+            }
+        }
+
+        private fun absorb(res: Resources, resId: Int) {
+            // Classification is a pure function of the resource id, and this runs on
+            // the hot icon path, so it is cached.
+            val code = CLASSIFIED[resId] ?: classify(res, resId).also { CLASSIFIED[resId] = it }
+            when {
+                code == C_IGNORE || code == C_TYPE -> Unit
+                code == C_CLEAR -> sMobileLevel = 0
+                code >= C_WIFI_BASE -> sWifiLevel = code - C_WIFI_BASE
+                else -> sMobileLevel = code
+            }
+        }
+
+        private fun classify(res: Resources, resId: Int): Int {
+            val code = computeCode(res, resId)
+            CLASSIFIED[resId] = code
+            return code
+        }
+
+        private fun computeCode(res: Resources, resId: Int): Int {
+            val name = try {
+                res.getResourceEntryName(resId)
+            } catch (_: Throwable) {
+                return C_IGNORE
+            } ?: return C_IGNORE
+            if (name.contains("activity_inout")) {
+                sDataActivity = 3
+            } else if (name.contains("activity_in")) {
+                sDataActivity = 1
+            } else if (name.contains("activity_out")) {
+                sDataActivity = 2
+            }
+
+            // A network-type icon is not a level, but it is the reading the glyph draws when it owns the label - so it is sampled here rather than from a second hook.
+            typeOfName(name)?.let { type ->
+                setMobileType(type)
+                return C_TYPE
+            }
+
+            val wifi = name.startsWith("stat_sys_wifi_signal") ||
+                    (name.startsWith("stat_sys_wifi2") && name.contains("_signal_"))
+            if (!wifi && !name.startsWith("stat_sys_signal")) return C_IGNORE
+
+            val value = parseLevel(name)
+            if (value < 0) {
+                // Decoration rather than a level change: keep the last level.
+                return if (name == "stat_sys_signal_null" || name == "stat_sys_signal_flightmode") {
+                    C_CLEAR
+                } else {
+                    C_IGNORE
+                }
+            }
+            return if (wifi) C_WIFI_BASE + value else value
+        }
+
+        /**
+         * The level an icon name carries, normalised to 0..4.
+         *
+         * MagicOS has two families on this ROM: `stat_sys_signal_N` (four bars) and
+         * `stat_sys_signal_five_N[_small|_fully]` (five bars, the shape the stock bar
+         * draws on a 5G phone). The glyph has four dots, so a five-bar level is scaled
+         * rather than truncated - a full five bars must still read as full.
+         */
+        private fun parseLevel(name: String): Int {
+            val parts = name.split("_")
+            for (i in 0 until parts.size - 1) {
+                if (parts[i] != "signal") continue
+                val five = parts[i + 1] == "five"
+                val raw = when {
+                    five -> parts.getOrNull(i + 2)
+                    else -> parts[i + 1]
+                }
+                if (raw == null || raw.length != 1 || raw[0] !in '0'..'9') return -1
+                val max = if (five) 5 else 4
+                val value = raw[0] - '0'
+                if (value > max) return -1
+                return if (max == 4) value else Math.round(value * 4f / max)
+            }
+            return -1
+        }
+
+        /**
+         * The network type an icon name names, or `null` when it names none.
+         *
+         * MagicOS' own `MobileMappings` picks `stat_sys_data_connected_*` for the
+         * connected state and `stat_sys_data_fully_connected_*` for the
+         * fully-connected one; both families carry the same suffixes, so one table
+         * covers them.
+         */
+        @JvmStatic
+        fun typeOfName(name: String): String? {
+            if (!name.startsWith("stat_sys_data_")) return null
+            if (name.contains("disabled")) return ""
+            // Roaming is drawn as its own marker; the type behind it is unchanged.
+            if (name.contains("roam")) return null
+            return when {
+                name.contains("_5ga") -> "5GA"
+                name.contains("_5point5g") -> "5.5G"
+                name.contains("_4point5g") -> "4.5G"
+                name.contains("_5g_plus") || name.contains("_5gplus") -> "5G+"
+                name.contains("_5g") -> "5G"
+                name.contains("_4gplus") || name.contains("_4g_plus") -> "4G+"
+                name.contains("_4g") -> "4G"
+                name.contains("_3gplus") || name.contains("_3g_plus") -> "3G+"
+                name.contains("_3g") -> "3G"
+                name.contains("_2g") -> "2G"
+                name.contains("_hplus") -> "H+"
+                name.endsWith("_h") -> "H"
+                name.endsWith("_e") -> "E"
+                name.endsWith("_g") || name.contains("_g_for_gsm_gprs") -> "G"
+                name.contains("_1x") || name.contains("_cdma") -> "1X"
+                else -> null
+            }
+        }
+    }
+}

@@ -1,0 +1,672 @@
+/*
+ * Copyright (C) 2026 yixing233 and HyperDuo contributors
+ * Copyright (C) 2026 odomu and HonorDuo contributors
+ *
+ * This file is part of HonorDuo, a fork of HyperDuo, released under the GNU
+ * General Public License v3.0. See the LICENSE file at the repository root, or
+ * <https://www.gnu.org/licenses/gpl-3.0.html>.
+ *
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+
+package io.github.odomu.honorduo.ui
+
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
+import androidx.core.content.edit
+import io.github.libxposed.service.XposedService
+import io.github.odomu.honorduo.HonorDuoApp
+import io.github.odomu.honorduo.model.Prefs
+import io.github.odomu.honorduo.model.TrioSettings
+import io.github.odomu.honorduo.render.TrioZones
+
+/**
+ * Reads and writes every setting, and mirrors each write to the Xposed
+ * framework so the hooked SystemUI process sees it immediately.
+ *
+ * Two stores are involved and only one of them is authoritative for the
+ * hooked process:
+ *
+ *   - the app's own [SharedPreferences] file, which drives this UI and
+ *       survives while the framework is absent;
+ *   - the framework's remote-preference group of the same name, which is what
+ *       the hooked process actually reads.
+ *
+ * The mirror is therefore not "sync on connect and forget": every single
+ * write is pushed, otherwise a value the user changes while the service is
+ * bound would never reach SystemUI.
+ */
+class SettingsRepository(context: Context) {
+
+    private val appContext = context.applicationContext
+    private val service: XposedService? get() = HonorDuoApp.xposedService
+
+    /** The display density, needed to migrate the retired raw-pixel size key. */
+    private val density: Float
+        get() = appContext.resources.displayMetrics.density
+
+    private fun preferences() =
+        appContext.getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+
+    /** The current values, as the preview should render them. */
+    fun read(): TrioSettings = TrioSettings.from(preferences(), density)
+
+    /**
+     * The snapshot for a style the user is *not* currently in.
+     *
+     * The style tiles need this: each arrangement keeps its own component switches and
+     * layout now, so showing the current one under both names would advertise a look that
+     * picking that tile does not produce.
+     *
+     * A pure read of the other arrangement's keys - the stored style is not touched, so
+     * nothing observes a transient state and no write is pushed to the hooked process.
+     */
+    fun readForStyle(style: Int): TrioSettings =
+        TrioSettings.from(preferences(), density, Prefs.normalizeTrioStyle(style))
+
+    fun setEnabled(value: Boolean) = writeBoolean(Prefs.KEY_ENABLED, value)
+
+    /** 圆环/胶囊与双排信号互斥：开启三合一字形时自动关闭双排信号。 */
+    fun setMergeIcons(value: Boolean) {
+        if (value) {
+            writeBooleans(Prefs.KEY_MERGE_ICONS to true, Prefs.KEY_DUAL_SIGNAL to false)
+        } else {
+            writeBoolean(Prefs.KEY_MERGE_ICONS, false)
+        }
+    }
+    fun setShowWifi(value: Boolean) = writeStyled(style(), Prefs.KEY_SHOW_WIFI) { e, k ->
+        e.putBoolean(k, value) }
+    fun setShowMobile(value: Boolean) = writeStyled(style(), Prefs.KEY_SHOW_MOBILE) { e, k ->
+        e.putBoolean(k, value) }
+    fun setShowValue(value: Boolean) = writeStyled(style(), Prefs.KEY_SHOW_VALUE) { e, k ->
+        e.putBoolean(k, value) }
+    fun setShowBolt(value: Boolean) = writeStyled(style(), Prefs.KEY_SHOW_BOLT) { e, k ->
+        e.putBoolean(k, value) }
+    fun setDualSim(value: Boolean) = writeStyled(style(), Prefs.KEY_DUAL_SIM) { e, k ->
+        e.putBoolean(k, value) }
+    /** SIM 1's own row of dots, placed as a component - see [Prefs.KEY_SHOW_SIM_1]. */
+    fun setShowSim1(value: Boolean) = writeStyled(style(), Prefs.KEY_SHOW_SIM_1) { e, k ->
+        e.putBoolean(k, value) }
+    /** SIM 2's own row of dots, placed as a component - see [Prefs.KEY_SHOW_SIM_2]. */
+    fun setShowSim2(value: Boolean) = writeStyled(style(), Prefs.KEY_SHOW_SIM_2) { e, k ->
+        e.putBoolean(k, value) }
+    fun setValueCentred(value: Boolean) = writeStyled(style(), Prefs.KEY_VALUE_CENTRED) { e, k ->
+        e.putBoolean(k, value) }
+    /** 0 = hidden, 1 = inside the ring, 2 = outside it. */
+    fun setMobileTypeMode(value: Int) = writeStyled(style(), Prefs.KEY_MOBILE_TYPE_MODE) { e, k ->
+        e.putInt(k, value) }
+    /** Stored IDs stay 0 = ring and 2 = capsule; retired ID 1 returns to the ring. */
+    fun setTrioStyle(value: Int) = writeInt(Prefs.KEY_TRIO_STYLE, Prefs.normalizeTrioStyle(value))
+    fun setNavStyle(value: Int) = writeInt(Prefs.KEY_NAV_STYLE, Prefs.normalizeNavStyle(value))
+    fun setNavLabels(value: Int) = writeInt(Prefs.KEY_NAV_LABELS, Prefs.normalizeNavLabels(value))
+
+    /**
+     * The arrangement the user is currently looking at.
+     *
+     * Every component switch is written under *this* style's key, so adjusting the
+     * capsule cannot reach into the ring's arrangement - see [Prefs.STYLED_KEYS]. Read fresh
+     * from storage rather than cached, because the style is itself a setting and a stale copy
+     * would write one arrangement's value into the other.
+     */
+    private fun style(): Int = Prefs.normalizeTrioStyle(preferences()
+        .getInt(Prefs.KEY_TRIO_STYLE, Prefs.DEF_TRIO_STYLE))
+
+    /**
+     * Writes one per-arrangement value, to this style's own key.
+     *
+     * [block] receives the resolved key rather than the base one: the whole point is that
+     * the caller does not decide which arrangement it is writing.
+     */
+    private fun writeStyled(
+        style: Int,
+        base: String,
+        block: (SharedPreferences.Editor, String) -> Unit,
+    ) {
+        val key = Prefs.styledKey(base, style)
+        preferences().edit(commit = true) { block(this, key) }
+        push { block(it, key) }
+
+    }
+
+    /** Publish one layout edit as a single local/remote transaction and one broadcast. */
+    fun applyRingAssignment(next: TrioSettings) {
+        // The arrangement being written is the snapshot's own, not the stored one: the caller
+        // built `next` for a specific style, and a layout written under the wrong key would
+        // show up in the other arrangement on the next style switch.
+        val style = Prefs.normalizeTrioStyle(next.trioStyle)
+        val write: (SharedPreferences.Editor) -> Unit = { e ->
+            e.putBoolean(Prefs.KEY_ENABLED, next.enabled)
+            e.putBoolean(Prefs.KEY_MERGE_ICONS, next.mergeIcons)
+            e.putString(Prefs.styledKey(Prefs.KEY_RING_LAYOUT, style),
+                Prefs.encodeLayout(next.ringZones))
+            e.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_WIFI, style), next.showWifi)
+            e.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_MOBILE, style), next.showMobile)
+            e.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_VALUE, style), next.showValue)
+            e.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_BOLT, style), next.showBolt)
+            e.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_SIM_1, style), next.showSim1)
+            e.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_SIM_2, style), next.showSim2)
+            e.putInt(Prefs.styledKey(Prefs.KEY_MOBILE_TYPE_MODE, style), next.mobileTypeMode)
+            e.putInt(Prefs.styledKey(Prefs.KEY_SIGNAL_MODE, style), next.signalMode)
+        }
+        preferences().edit {
+            write(this)
+        }
+        push(write)
+
+    }
+
+    /**
+     * Put a piece at the front of a zone's priority list, or take it out of the layout.
+     *
+     * Mirrors the old "position" control: 1..3 name a ring zone and 0 (or the external
+     * type slot) removes the piece. The three ints are still the three zones, which is why
+     * the mapping is kept - the ring's editor drives the priority lists directly.
+     */
+    fun setRingPartPosition(part: TrioZones.Part, position: Int) {
+        val current = TrioSettings.from(preferences(), density)
+        if (position in 1..3) {
+            applyRingAssignment(
+                TrioZones.withPiece(current, position - 1, part)
+            )
+        } else {
+            val next = current.copy()
+            val id = TrioZones.encodePart(part)
+            next.ringZones = TrioSettings.copyZones(current.ringZones)
+            for (zone in next.ringZones.indices) {
+                next.ringZones[zone] = next.ringZones[zone].filter { it != id }.toIntArray()
+            }
+            if (part == TrioZones.Part.TYPE) {
+                next.mobileTypeMode =
+                    if (position == 4) Prefs.MOBILE_TYPE_OUT_RING else Prefs.MOBILE_TYPE_OFF
+            }
+            applyRingAssignment(next)
+        }
+    }
+    /**
+     * Wi-Fi's switch and ring slot as one decision: `0` turns the arcs off and takes
+     * them out of the layout, `1..3` turn them on and put them in that third.
+     *
+     * One call rather than two setters, because the pair has to move together: between a
+     * "switch off" write and a "remove from layout" write the module would be asked to draw
+     * arcs it has no slot for, or hold a slot it will not fill.
+     */
+    fun setWifiPosition(position: Int) {
+        val current = TrioSettings.from(preferences(), density)
+        if (position in 1..3) {
+            val next = TrioZones.withPiece(
+                current, position - 1, TrioZones.Part.WIFI)
+            next.showWifi = true
+            applyRingAssignment(next)
+        } else {
+            val next = current.copy()
+            next.showWifi = false
+            val id = TrioZones.encodePart(
+                TrioZones.Part.WIFI)
+            next.ringZones = TrioSettings.copyZones(current.ringZones)
+            for (zone in next.ringZones.indices) {
+                next.ringZones[zone] = next.ringZones[zone].filter { it != id }.toIntArray()
+            }
+            applyRingAssignment(next)
+        }
+    }
+
+    
+    fun setSignalMode(value: Int) = writeStyled(style(), Prefs.KEY_SIGNAL_MODE) { e, k ->
+        e.putInt(k, value.coerceIn(Prefs.MIN_SIGNAL_MODE, Prefs.MAX_SIGNAL_MODE)) }
+
+    /** Out of ring, draw the module's own reading rather than handing the icon back. */
+    fun setStackedSignal(value: Boolean) = writeStyled(style(), Prefs.KEY_STACKED_SIGNAL) { e, k ->
+        e.putBoolean(k, value) }
+    fun setShowMobileActivity(value: Boolean) = writeStyled(style(), Prefs.KEY_SHOW_MOBILE_ACTIVITY) { e, k ->
+        e.putBoolean(k, value) }
+
+    fun setDataSimOnly(value: Boolean) = writeBoolean(Prefs.KEY_DATA_SIM_ONLY, value)
+
+    /** Percent sign after the in-glyph battery number - see [Prefs.KEY_SHOW_PERCENT]. */
+    fun setShowPercent(value: Boolean) = writeBoolean(Prefs.KEY_SHOW_PERCENT, value)
+
+    /** A charger puts the percentage in the ring's centre - see [Prefs.KEY_CHARGING_SHOWS_VALUE]. */
+    fun setChargingShowsValue(value: Boolean) = writeBoolean(Prefs.KEY_CHARGING_SHOWS_VALUE, value)
+
+    /** The type steps aside while Wi-Fi is up - see [Prefs.KEY_TYPE_HIDE_ON_WIFI]. */
+    fun setTypeHideOnWifi(value: Boolean) = writeBoolean(Prefs.KEY_TYPE_HIDE_ON_WIFI, value)
+
+    /** The temperature rides with the charger - see [Prefs.KEY_PERF_TEMP_CHARGING_ONLY]. */
+    /** Wi-Fi arc size, in percent - see [Prefs.KEY_WIFI_SCALE]. */
+    fun setWifiScale(value: Int) = writeInt(Prefs.KEY_WIFI_SCALE, value)
+
+    /** The capsule's extra straight run - see [Prefs.KEY_CAPSULE_LENGTH]. */
+    fun setCapsuleLength(value: Int) = writeInt(Prefs.KEY_CAPSULE_LENGTH, value)
+    fun setCapsuleLeftDx(value: Int) = writeInt(Prefs.KEY_CAPSULE_LEFT_DX, value)
+    fun setCapsuleLeftDy(value: Int) = writeInt(Prefs.KEY_CAPSULE_LEFT_DY, value)
+    fun setCapsuleRightDx(value: Int) = writeInt(Prefs.KEY_CAPSULE_RIGHT_DX, value)
+    fun setCapsuleRightDy(value: Int) = writeInt(Prefs.KEY_CAPSULE_RIGHT_DY, value)
+    fun setRingSpacingX(value: Int) = writeInt(Prefs.KEY_RING_SPACING_X, value)
+    fun setRingSpacingY(value: Int) = writeInt(Prefs.KEY_RING_SPACING_Y, value)
+    fun setReplaceWifiIcon(value: Boolean) = writeBoolean(Prefs.KEY_REPLACE_WIFI_ICON, value)
+    fun setReplaceStatusIcon(value: Boolean) = writeBoolean(Prefs.KEY_REPLACE_STATUS_ICON, value)
+    fun setHideStatusClock(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, value)
+    fun setHideAlarmIcon(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_ALARM_ICON, value)
+    fun setHideBluetoothIcon(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, value)
+
+    /** 控制中心音量条长按弹荣耀媒体输出弹窗（HonorDuoBar 1.1.3）。 */
+    fun setCcVolumeLongpress(value: Boolean) = writeBoolean(Prefs.KEY_CC_VOLUME_LONGPRESS, value)
+
+    /** Dual-row signal replaces the native signal cluster - see [Prefs.KEY_DUAL_SIGNAL]. */
+    fun setDualSignal(value: Boolean) {
+        if (value) {
+            // 与圆环/胶囊互斥：开双排就关三合一字形，避免两者同时接管信号。
+            writeBooleans(Prefs.KEY_DUAL_SIGNAL to true, Prefs.KEY_MERGE_ICONS to false)
+        } else {
+            writeBoolean(Prefs.KEY_DUAL_SIGNAL, false)
+        }
+    }
+
+    /** Network-type label beside the dual-row signal - see [Prefs.KEY_DUAL_SIGNAL_LABEL]. */
+    fun setDualSignalLabel(value: Boolean) = writeBoolean(Prefs.KEY_DUAL_SIGNAL_LABEL, value)
+
+    /** Traffic arrows beside the dual-row signal - see [Prefs.KEY_DUAL_SIGNAL_ARROWS]. */
+    fun setDualSignalArrows(value: Boolean) = writeBoolean(Prefs.KEY_DUAL_SIGNAL_ARROWS, value)
+
+    /** Hides the secondary SIM's status-bar signal icon - see [Prefs.KEY_HIDE_SIM2]. */
+    fun setHideSim2(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_SIM2, value)
+
+    /** Hides the native 5G/4G network-type label - see [Prefs.KEY_HIDE_NET_TYPE]. */
+    fun setHideNetType(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_NET_TYPE, value)
+
+    /** Hides the charging notification - see [Prefs.KEY_NOTIF_HIDE_CHARGING]. */
+    fun setNotifHideCharging(value: Boolean) = writeBoolean(Prefs.KEY_NOTIF_HIDE_CHARGING, value)
+
+    /** Hides the hotspot notification - see [Prefs.KEY_NOTIF_HIDE_HOTSPOT]. */
+    fun setNotifHideHotspot(value: Boolean) = writeBoolean(Prefs.KEY_NOTIF_HIDE_HOTSPOT, value)
+
+    /** Hides the USB-debugging notification - see [Prefs.KEY_NOTIF_HIDE_USB]. */
+    fun setNotifHideUsb(value: Boolean) = writeBoolean(Prefs.KEY_NOTIF_HIDE_USB, value)
+
+    fun setPerfTempChargingOnly(value: Boolean) =
+        writeBoolean(Prefs.KEY_PERF_TEMP_CHARGING_ONLY, value)
+
+    /** Charging power in the out-of-ring strip - see [Prefs.KEY_PERF_POWER]. */
+    fun setPerfPower(value: Boolean) = writeBoolean(Prefs.KEY_PERF_POWER, value)
+    /** Keep the power readout while unplugged - see [Prefs.KEY_PERF_RUNNING]. */
+    fun setPerfRunning(value: Boolean) = writeBoolean(Prefs.KEY_PERF_RUNNING, value)
+    /** Seconds in the drawn time - see [Prefs.KEY_CLOCK_SECONDS]. */
+    fun setClockSeconds(value: Boolean) = writeBoolean(Prefs.KEY_CLOCK_SECONDS, value)
+    /** Date line above the drawn time - see [Prefs.KEY_CLOCK_DATE]. */
+    fun setClockDate(value: Boolean) = writeBoolean(Prefs.KEY_CLOCK_DATE, value)
+    /** Weekday beside the date - see [Prefs.KEY_CLOCK_WEEKDAY]. */
+    fun setClockWeekday(value: Boolean) = writeBoolean(Prefs.KEY_CLOCK_WEEKDAY, value)
+    fun setClockTopOffsetX(value: Int) = writeInt(Prefs.KEY_CLOCK_TOP_OFFSET_X, value)
+    fun setClockBottomOffsetX(value: Int) = writeInt(Prefs.KEY_CLOCK_BOTTOM_OFFSET_X, value)
+    fun setClockLunarGap(value: Int) = writeInt(Prefs.KEY_CLOCK_LUNAR_GAP, value)
+    fun setClockRowGap(value: Int) = writeInt(Prefs.KEY_CLOCK_ROW_GAP, value)
+    fun setClockLunar(value: Boolean) = writeBoolean(Prefs.KEY_CLOCK_LUNAR, value)
+    fun setClockDateFormat(value: Int) = writeInt(Prefs.KEY_CLOCK_DATE_FORMAT, value)
+    fun setClockWeekdayFormat(value: Int) = writeInt(Prefs.KEY_CLOCK_WEEKDAY_FORMAT, value)
+    fun setColorClockWeekdayOnDark(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_WEEKDAY_ON_DARK, value)
+    fun setColorClockWeekdayOnLight(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_WEEKDAY_ON_LIGHT, value)
+    fun setColorClockDateOnDark(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_DATE_ON_DARK, value)
+    fun setColorClockDateOnLight(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_DATE_ON_LIGHT, value)
+    fun setColorClockLunarOnDark(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_LUNAR_ON_DARK, value)
+    fun setColorClockLunarOnLight(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_LUNAR_ON_LIGHT, value)
+    fun setClockWeather(value: Boolean) = writeBoolean(Prefs.KEY_CLOCK_WEATHER, value)
+    fun setClockWeatherStyle(value: Int) = writeInt(Prefs.KEY_CLOCK_WEATHER_STYLE, value)
+    fun setClockStyle(value: Int) = writeInt(Prefs.KEY_CLOCK_STYLE, value)
+    fun setShadeHidePower(value: Boolean) = writeBoolean(Prefs.KEY_SHADE_HIDE_POWER, value)
+    fun setShadeHideBell(value: Boolean) = writeBoolean(Prefs.KEY_SHADE_HIDE_BELL, value)
+    fun setShadeLunar(value: Boolean) = writeBoolean(Prefs.KEY_SHADE_LUNAR, value)
+    fun setShadeWeather(value: Boolean) = writeBoolean(Prefs.KEY_SHADE_WEATHER, value)
+    fun setShadeWeatherStyle(value: Int) = writeInt(Prefs.KEY_SHADE_WEATHER_STYLE, value)
+    fun setColorClockWeatherOnDark(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_WEATHER_ON_DARK, value)
+    fun setColorClockWeatherOnLight(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_WEATHER_ON_LIGHT, value)
+    /** Battery temperature in the out-of-ring strip - see [Prefs.KEY_PERF_TEMP]. */
+    fun setPerfTemp(value: Boolean) = writeBoolean(Prefs.KEY_PERF_TEMP, value)
+    /** The screen's frame rate - see [Prefs.KEY_PERF_FPS]. */
+    fun setPerfFps(value: Boolean) = writeBoolean(Prefs.KEY_PERF_FPS, value)
+    /** Overall size of the two readouts, in percent - see [Prefs.KEY_PERF_SCALE]. */
+    fun setPerfScale(value: Int) = writeInt(Prefs.KEY_PERF_SCALE, value)
+    /** Weight of the two readouts - see [Prefs.KEY_PERF_WEIGHT]. */
+    fun setPerfWeight(value: Int) = writeInt(Prefs.KEY_PERF_WEIGHT, value)
+    fun setPerfLineGap(value: Int) = writeInt(Prefs.KEY_PERF_LINE_GAP, value)
+
+    /** Size of the in-ring charging bolt, in percent - see [Prefs.KEY_BOLT_SCALE]. */
+    fun setBoltScale(value: Int) = writeInt(Prefs.KEY_BOLT_SCALE, value)
+
+    /** How the charging bolt moves - see [Prefs.KEY_BOLT_ANIM]. */
+    fun setBoltAnim(value: Int) = writeInt(Prefs.KEY_BOLT_ANIM, value)
+
+    /** Speed of the charging animation, in percent - see [Prefs.KEY_BOLT_SPEED]. */
+    fun setBoltSpeed(value: Int) = writeInt(Prefs.KEY_BOLT_SPEED, value)
+
+    /**
+     * Size of the ring's level-dot rows, in percent - see [Prefs.KEY_DOT_SCALE].
+     *
+     * One setter for the top and the bottom rows: they are one piece of ink, and the
+     * settings screen offers one row for them.
+     */
+    fun setDotScale(value: Int) = writeInt(Prefs.KEY_DOT_SCALE, value)
+
+    /**
+     * The out-of-ring order, nearest the battery first - see [Prefs.KEY_OUT_ORDER].
+     *
+     * One write for the whole arrangement rather than a "move this piece" verb: the strip
+     * always has exactly three positions, so a swap is expressible as the resulting order
+     * and there is no intermediate state another reader could observe.
+     */
+    fun setOutOrder(order: IntArray) =
+        writeString(Prefs.KEY_OUT_ORDER, Prefs.encodeOutOrder(order))
+
+    fun setRoleColors(value: Boolean) = writeBoolean(Prefs.KEY_ROLE_COLORS, value)
+    fun setColorCriticalOnDark(value: Int) = writeInt(Prefs.KEY_COLOR_CRITICAL_ON_DARK, value)
+    fun setColorCriticalOnLight(value: Int) = writeInt(Prefs.KEY_COLOR_CRITICAL_ON_LIGHT, value)
+    fun setColorChargingOnDark(value: Int) = writeInt(Prefs.KEY_COLOR_CHARGING_ON_DARK, value)
+    fun setColorChargingOnLight(value: Int) = writeInt(Prefs.KEY_COLOR_CHARGING_ON_LIGHT, value)
+    fun setColorLowOnDark(value: Int) = writeInt(Prefs.KEY_COLOR_LOW_ON_DARK, value)
+    fun setColorLowOnLight(value: Int) = writeInt(Prefs.KEY_COLOR_LOW_ON_LIGHT, value)
+
+    /** Restores every role colour, the clock's three included, to its default. */
+    fun resetRoleColors() {
+        preferences().edit(commit = true) {
+            putInt(Prefs.KEY_COLOR_CRITICAL_ON_DARK, Prefs.DEF_COLOR_CRITICAL_ON_DARK)
+            putInt(Prefs.KEY_COLOR_CRITICAL_ON_LIGHT, Prefs.DEF_COLOR_CRITICAL_ON_LIGHT)
+            putInt(Prefs.KEY_COLOR_CHARGING_ON_DARK, Prefs.DEF_COLOR_CHARGING_ON_DARK)
+            putInt(Prefs.KEY_COLOR_CHARGING_ON_LIGHT, Prefs.DEF_COLOR_CHARGING_ON_LIGHT)
+            putInt(Prefs.KEY_COLOR_LOW_ON_DARK, Prefs.DEF_COLOR_LOW_ON_DARK)
+            putInt(Prefs.KEY_COLOR_LOW_ON_LIGHT, Prefs.DEF_COLOR_LOW_ON_LIGHT)
+            putInt(Prefs.KEY_COLOR_HIGH_TEMP_ON_DARK, Prefs.DEF_COLOR_HIGH_TEMP_ON_DARK)
+            putInt(Prefs.KEY_COLOR_HIGH_TEMP_ON_LIGHT, Prefs.DEF_COLOR_HIGH_TEMP_ON_LIGHT)
+            putInt(Prefs.KEY_COLOR_CLOCK_WEEKDAY_ON_DARK, Prefs.DEF_COLOR_CLOCK)
+            putInt(Prefs.KEY_COLOR_CLOCK_WEEKDAY_ON_LIGHT, Prefs.DEF_COLOR_CLOCK)
+            putInt(Prefs.KEY_COLOR_CLOCK_DATE_ON_DARK, Prefs.DEF_COLOR_CLOCK)
+            putInt(Prefs.KEY_COLOR_CLOCK_DATE_ON_LIGHT, Prefs.DEF_COLOR_CLOCK)
+            putInt(Prefs.KEY_COLOR_CLOCK_LUNAR_ON_DARK, Prefs.DEF_COLOR_CLOCK)
+            putInt(Prefs.KEY_COLOR_CLOCK_LUNAR_ON_LIGHT, Prefs.DEF_COLOR_CLOCK)
+        }
+        push { prefs ->
+            prefs.putInt(Prefs.KEY_COLOR_CRITICAL_ON_DARK, Prefs.DEF_COLOR_CRITICAL_ON_DARK)
+            prefs.putInt(Prefs.KEY_COLOR_CRITICAL_ON_LIGHT, Prefs.DEF_COLOR_CRITICAL_ON_LIGHT)
+            prefs.putInt(Prefs.KEY_COLOR_CHARGING_ON_DARK, Prefs.DEF_COLOR_CHARGING_ON_DARK)
+            prefs.putInt(Prefs.KEY_COLOR_CHARGING_ON_LIGHT, Prefs.DEF_COLOR_CHARGING_ON_LIGHT)
+            prefs.putInt(Prefs.KEY_COLOR_LOW_ON_DARK, Prefs.DEF_COLOR_LOW_ON_DARK)
+            prefs.putInt(Prefs.KEY_COLOR_LOW_ON_LIGHT, Prefs.DEF_COLOR_LOW_ON_LIGHT)
+            prefs.putInt(Prefs.KEY_COLOR_HIGH_TEMP_ON_DARK, Prefs.DEF_COLOR_HIGH_TEMP_ON_DARK)
+            prefs.putInt(Prefs.KEY_COLOR_HIGH_TEMP_ON_LIGHT, Prefs.DEF_COLOR_HIGH_TEMP_ON_LIGHT)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_WEEKDAY_ON_DARK, Prefs.DEF_COLOR_CLOCK)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_WEEKDAY_ON_LIGHT, Prefs.DEF_COLOR_CLOCK)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_DATE_ON_DARK, Prefs.DEF_COLOR_CLOCK)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_DATE_ON_LIGHT, Prefs.DEF_COLOR_CLOCK)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_LUNAR_ON_DARK, Prefs.DEF_COLOR_CLOCK)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_LUNAR_ON_LIGHT, Prefs.DEF_COLOR_CLOCK)
+        }
+
+    }
+
+    fun setLowThreshold(value: Int) = writeInt(Prefs.KEY_LOW_THRESHOLD, value)
+    fun setTempThreshold(value: Int) = writeInt(
+        Prefs.KEY_TEMP_THRESHOLD,
+        Prefs.clamp(value, Prefs.MIN_TEMP_THRESHOLD, Prefs.MAX_TEMP_THRESHOLD)
+    )
+    fun setColorHighTempOnDark(argb: Int) = writeInt(Prefs.KEY_COLOR_HIGH_TEMP_ON_DARK, argb)
+    fun setColorHighTempOnLight(argb: Int) = writeInt(Prefs.KEY_COLOR_HIGH_TEMP_ON_LIGHT, argb)
+    fun setRoleColorsTemp(value: Boolean) = writeBoolean(Prefs.KEY_ROLE_COLORS_TEMP, value)
+    fun setRingStroke(value: Int) = writeInt(Prefs.KEY_RING_STROKE, value)
+    fun setArcStroke(value: Int) = writeInt(Prefs.KEY_ARC_STROKE, value)
+    fun setValueSize(value: Int) = writeInt(Prefs.KEY_VALUE_SIZE, value)
+    fun setValueWeight(value: Int) = writeInt(Prefs.KEY_VALUE_WEIGHT, value)
+    fun setClockSize(value: Int) = writeInt(Prefs.KEY_CLOCK_SIZE, value)
+    fun setClockWeight(value: Int) = writeInt(Prefs.KEY_CLOCK_WEIGHT, value)
+    fun setTypeSize(value: Int) = writeInt(Prefs.KEY_TYPE_SIZE, value)
+    fun setOutTypeSize(value: Int) = writeInt(Prefs.KEY_OUT_TYPE_SIZE_DP, value)
+    fun setOutSignalSize(value: Int) = writeInt(Prefs.KEY_OUT_SIGNAL_SIZE, value)
+    /** Dot-row size of the out-of-ring reading - see [Prefs.KEY_OUT_DOT_SIZE]. */
+    fun setOutDotSize(value: Int) = writeInt(Prefs.KEY_OUT_DOT_SIZE, value)
+    /** Stacked look of the out-of-ring reading - see [Prefs.KEY_STACK_STYLE]. */
+    fun setStackStyle(value: Int) = writeInt(Prefs.KEY_STACK_STYLE, value)
+    fun setAntiBurnIn(value: Boolean) = writeBoolean(Prefs.KEY_ANTI_BURN_IN, value)
+    fun setSignalColumns(value: Int) = writeInt(Prefs.KEY_SIGNAL_COLUMNS, Prefs.clamp(value, 4, 5))
+    /** Where the stacked reading puts its type - see [Prefs.KEY_STACK_LABEL]. */
+    fun setStackLabel(value: Int) = writeInt(Prefs.KEY_STACK_LABEL, value)
+    fun setOutTypeMarginLeft(value: Int) = writeInt(Prefs.KEY_OUT_TYPE_MARGIN_LEFT, value)
+    fun setOutTypeMarginRight(value: Int) = writeInt(Prefs.KEY_OUT_TYPE_MARGIN_RIGHT, value)
+    fun setOutSignalMargin(value: Int) = writeInt(Prefs.KEY_OUT_SIGNAL_MARGIN, value)
+
+    /** Gap between the capsule's cells - see [Prefs.KEY_CAP_GAP]. */
+    fun setCapGap(value: Int) = writeInt(
+        Prefs.KEY_CAP_GAP, value.coerceIn(Prefs.MIN_CAP_GAP, Prefs.MAX_CAP_GAP),
+    )
+    fun setTypeSuffixScale(value: Int) = writeInt(Prefs.KEY_TYPE_SUFFIX_SCALE, value)
+    fun setTypeWeight(value: Int) = writeInt(Prefs.KEY_TYPE_WEIGHT, value)
+    fun setTrackAlpha(value: Int) = writeInt(Prefs.KEY_TRACK_ALPHA, value)
+
+    /** Overall size of the trio glyph, in percent - see [Prefs.KEY_GLYPH_SCALE]. */
+    fun setGlyphScale(value: Int) = writeInt(Prefs.KEY_GLYPH_SCALE, value)
+    fun setFontPath(value: String) = writeString(Prefs.KEY_FONT_PATH, value)
+    fun setDebugLog(value: Boolean) = writeBoolean(Prefs.KEY_DEBUG_LOG, value)
+
+    /** Pull-down morph - see [Prefs.KEY_TRIO_MORPH]. */
+    fun setTrioMorph(value: Boolean) = writeBoolean(Prefs.KEY_TRIO_MORPH, value)
+
+    /** Gap between the expanded morph row's icons - see [Prefs.KEY_TRIO_ROW_GAP]. */
+    fun setTrioRowGap(value: Int) = writeInt(Prefs.KEY_TRIO_ROW_GAP, Prefs.resolveTrioRowGap(value))
+
+    /** Battery digit size, 0 for automatic - see [Prefs.KEY_TRIO_DIGIT_SIZE]. */
+    fun setTrioDigitSize(value: Int) =
+        writeInt(Prefs.KEY_TRIO_DIGIT_SIZE, Prefs.resolveTrioDigitSize(value))
+
+    /** Forced morph progress for diagnostics - see [Prefs.KEY_TRIO_MORPH_DEBUG]. */
+    fun setTrioMorphDebug(value: Int) =
+        writeInt(Prefs.KEY_TRIO_MORPH_DEBUG, Prefs.resolveMorphDebug(value))
+
+    /** Toast when the morph flips state - see [Prefs.KEY_TRIO_MORPH_TOAST]. */
+    fun setTrioMorphToast(value: Boolean) = writeBoolean(Prefs.KEY_TRIO_MORPH_TOAST, value)
+
+    /** Live up/down traffic triangles on the Wi-Fi arcs - see [Prefs.KEY_TRAFFIC_ARROWS]. */
+    fun setTrafficArrows(value: Boolean) = writeBoolean(Prefs.KEY_TRAFFIC_ARROWS, value)
+
+    /** Live up/down traffic triangles on the SIM dots - see [Prefs.KEY_MOBILE_TRAFFIC_ARROWS]. */
+    fun setMobileTrafficArrows(value: Boolean) =
+        writeBoolean(Prefs.KEY_MOBILE_TRAFFIC_ARROWS, value)
+
+    /** Charge fill breathing - see [Prefs.KEY_TRIO_CHARGE_BREATH]. */
+    fun setTrioChargeBreath(value: Boolean) = writeBoolean(Prefs.KEY_TRIO_CHARGE_BREATH, value)
+
+    /** Bluetooth earbud battery: 0 off, 1 arc, 2 number - see [Prefs.KEY_TRIO_BT_BATTERY]. */
+    fun setTrioBtBattery(value: Int) =
+        writeInt(Prefs.KEY_TRIO_BT_BATTERY, value.coerceIn(0, Prefs.MAX_TRIO_BT_BATTERY))
+
+    /** Compact icon row - see [Prefs.KEY_TRIO_COMPACT_ROW]. */
+    fun setTrioCompactRow(value: Boolean) = writeBoolean(Prefs.KEY_TRIO_COMPACT_ROW, value)
+
+    /** Keep status icons while the live capsule is expanded - see [Prefs.KEY_TRIO_KEEP_ICONS]. */
+    fun setTrioKeepIcons(value: Boolean) = writeBoolean(Prefs.KEY_TRIO_KEEP_ICONS, value)
+
+    /** Stop the live capsule's status-bar shrink - see [Prefs.KEY_CAPSULE_NO_SCALE]. */
+    fun setCapsuleNoScale(value: Boolean) = writeBoolean(Prefs.KEY_CAPSULE_NO_SCALE, value)
+
+    /** Native icons while the panel is expanded - see [Prefs.KEY_PANEL_NATIVE_ICONS]. */
+    fun setPanelNativeIcons(value: Boolean) = writeBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, value)
+
+    /**
+     * Pushes every value currently in the app's own file to the framework.
+     *
+     * Called once when the service binds: while the framework is not
+     * connected writes only land in the app's file, so a plain "push on write"
+     * would leave SystemUI running with stale values from a previous session.
+     */
+    fun syncAllToFramework() {
+        val current = preferences()
+        val snapshot = TrioSettings.from(current, density)
+        // The component switches go out under the CURRENT arrangement's key. The hooked
+        // process reads the same way, so both sides agree about which set is live without
+        // having to exchange two snapshots.
+        val style = Prefs.normalizeTrioStyle(snapshot.trioStyle)
+        push { prefs ->
+            prefs.putBoolean(Prefs.KEY_ENABLED, snapshot.enabled)
+            prefs.putBoolean(Prefs.KEY_MERGE_ICONS, snapshot.mergeIcons)
+            prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_WIFI, style), snapshot.showWifi)
+            prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_MOBILE, style), snapshot.showMobile)
+            prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_VALUE, style), snapshot.showValue)
+            prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_BOLT, style), snapshot.showBolt)
+            prefs.putBoolean(Prefs.styledKey(Prefs.KEY_DUAL_SIM, style), snapshot.dualSim)
+            prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_SIM_1, style), snapshot.showSim1)
+            prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_SIM_2, style), snapshot.showSim2)
+            prefs.putInt(Prefs.styledKey(Prefs.KEY_MOBILE_TYPE_MODE, style),
+                snapshot.mobileTypeMode)
+            prefs.putBoolean(Prefs.styledKey(Prefs.KEY_VALUE_CENTRED, style),
+                snapshot.valueCentred)
+            prefs.putInt(Prefs.KEY_TRIO_STYLE, snapshot.trioStyle)
+            prefs.putInt(Prefs.KEY_NAV_STYLE, snapshot.navStyle)
+            prefs.putInt(Prefs.KEY_NAV_LABELS, snapshot.navLabels)
+            prefs.putString(Prefs.styledKey(Prefs.KEY_RING_LAYOUT, style),
+                Prefs.encodeLayout(snapshot.ringZones))
+            prefs.putBoolean(Prefs.KEY_DATA_SIM_ONLY, snapshot.dataSimOnly)
+            prefs.putBoolean(Prefs.KEY_PERF_POWER, snapshot.perfPower)
+            prefs.putBoolean(Prefs.KEY_PERF_RUNNING, snapshot.perfRunning)
+            prefs.putBoolean(Prefs.KEY_CLOCK_SECONDS, snapshot.clockSeconds)
+            prefs.putBoolean(Prefs.KEY_CLOCK_DATE, snapshot.clockDate)
+            prefs.putBoolean(Prefs.KEY_CLOCK_WEEKDAY, snapshot.clockWeekday)
+            prefs.putBoolean(Prefs.KEY_CLOCK_WEATHER, snapshot.clockWeather)
+            prefs.putInt(Prefs.KEY_CLOCK_WEATHER_STYLE, snapshot.clockWeatherStyle)
+            prefs.putInt(Prefs.KEY_CLOCK_STYLE, snapshot.clockStyle)
+            prefs.putBoolean(Prefs.KEY_SHADE_HIDE_POWER, snapshot.shadeHidePower)
+            prefs.putBoolean(Prefs.KEY_SHADE_HIDE_BELL, snapshot.shadeHideBell)
+            prefs.putBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, snapshot.hideStatusClock)
+            prefs.putBoolean(Prefs.KEY_HIDE_ALARM_ICON, snapshot.hideAlarmIcon)
+            prefs.putBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, snapshot.hideBluetoothIcon)
+            prefs.putBoolean(Prefs.KEY_SHADE_LUNAR, snapshot.shadeLunar)
+            prefs.putBoolean(Prefs.KEY_SHADE_WEATHER, snapshot.shadeWeather)
+            prefs.putInt(Prefs.KEY_SHADE_WEATHER_STYLE, snapshot.shadeWeatherStyle)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_WEATHER_ON_DARK, snapshot.clockWeatherColorOnDark)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_WEATHER_ON_LIGHT, snapshot.clockWeatherColorOnLight)
+            prefs.putBoolean(Prefs.KEY_PERF_TEMP, snapshot.perfTemp)
+            prefs.putBoolean(Prefs.KEY_PERF_TEMP_CHARGING_ONLY, snapshot.perfTempChargingOnly)
+            prefs.putBoolean(Prefs.KEY_CHARGING_SHOWS_VALUE, snapshot.chargingShowsValue)
+            prefs.putInt(Prefs.KEY_WIFI_SCALE, snapshot.wifiScale)
+            prefs.putInt(Prefs.KEY_CAPSULE_LENGTH, snapshot.capsuleLength)
+            prefs.putInt(Prefs.KEY_CAPSULE_LEFT_DX, snapshot.capsuleLeftDx)
+            prefs.putInt(Prefs.KEY_CAPSULE_LEFT_DY, snapshot.capsuleLeftDy)
+            prefs.putInt(Prefs.KEY_CAPSULE_RIGHT_DX, snapshot.capsuleRightDx)
+            prefs.putInt(Prefs.KEY_CAPSULE_RIGHT_DY, snapshot.capsuleRightDy)
+            prefs.putBoolean(Prefs.KEY_TYPE_HIDE_ON_WIFI, snapshot.typeHideOnWifi)
+            prefs.putInt(Prefs.KEY_PERF_SCALE, snapshot.perfScale)
+            prefs.putInt(Prefs.KEY_PERF_WEIGHT, snapshot.perfWeight)
+            prefs.putInt(Prefs.KEY_GLYPH_SCALE, snapshot.glyphScale)
+
+            prefs.putBoolean(Prefs.KEY_ROLE_COLORS, snapshot.roleColors)
+            prefs.putInt(Prefs.KEY_COLOR_CRITICAL_ON_DARK, snapshot.criticalOnDark)
+            prefs.putInt(Prefs.KEY_COLOR_CRITICAL_ON_LIGHT, snapshot.criticalOnLight)
+            prefs.putInt(Prefs.KEY_COLOR_CHARGING_ON_DARK, snapshot.chargingOnDark)
+            prefs.putInt(Prefs.KEY_COLOR_CHARGING_ON_LIGHT, snapshot.chargingOnLight)
+            prefs.putInt(Prefs.KEY_COLOR_LOW_ON_DARK, snapshot.lowOnDark)
+            prefs.putInt(Prefs.KEY_COLOR_LOW_ON_LIGHT, snapshot.lowOnLight)
+            prefs.putInt(Prefs.KEY_LOW_THRESHOLD, snapshot.lowThreshold)
+
+            prefs.putInt(Prefs.KEY_RING_STROKE, snapshot.ringStroke)
+            prefs.putInt(Prefs.KEY_ARC_STROKE, snapshot.arcStroke)
+            prefs.putInt(Prefs.KEY_VALUE_SIZE, snapshot.valueSize)
+            prefs.putInt(Prefs.KEY_VALUE_WEIGHT, snapshot.valueWeight)
+            // The clock's own pair. No migration is needed here even though the two
+            // keys are new: TrioSettings reads them with the value's size and weight
+            // as the fallback, so writing the snapshot's own clockSize - which the
+            // repository has already defaulted to the value's - reproduces exactly
+            // the look an install had when the two readings shared one size.
+            prefs.putInt(Prefs.KEY_CLOCK_SIZE, snapshot.clockSize)
+            prefs.putInt(Prefs.KEY_CLOCK_WEIGHT, snapshot.clockWeight)
+            prefs.putInt(Prefs.KEY_TYPE_SIZE, snapshot.typeSize)
+            prefs.putInt(Prefs.KEY_OUT_TYPE_SIZE_DP, snapshot.outTypeSize)
+            prefs.putInt(Prefs.KEY_OUT_SIGNAL_SIZE, snapshot.outSignalSize)
+            prefs.putInt(Prefs.KEY_OUT_DOT_SIZE, snapshot.outDotSize)
+            prefs.putInt(Prefs.KEY_STACK_STYLE, snapshot.stackStyle)
+            prefs.putInt(Prefs.KEY_STACK_LABEL, snapshot.stackLabel)
+            prefs.putBoolean(Prefs.KEY_ANTI_BURN_IN, snapshot.antiBurnIn)
+            prefs.putInt(Prefs.KEY_SIGNAL_COLUMNS, snapshot.signalColumns)
+            prefs.putInt(Prefs.KEY_OUT_TYPE_MARGIN_LEFT, snapshot.outTypeMarginLeft)
+            prefs.putInt(Prefs.KEY_OUT_TYPE_MARGIN_RIGHT, snapshot.outTypeMarginRight)
+            prefs.putInt(Prefs.KEY_OUT_SIGNAL_MARGIN, snapshot.outSignalMargin)
+            prefs.putInt(Prefs.KEY_TYPE_SUFFIX_SCALE, snapshot.typeSuffixScale)
+            prefs.putInt(Prefs.KEY_TYPE_WEIGHT, snapshot.typeWeight)
+            prefs.putInt(Prefs.KEY_TRACK_ALPHA, snapshot.trackAlpha)
+            prefs.putString(Prefs.KEY_FONT_PATH, snapshot.fontPath)
+
+            // Sent on connect as well as on write, because both are drawing sizes the
+            // hooked process cannot re-derive: a value changed while the framework was
+            // unbound would otherwise never reach SystemUI.
+            prefs.putInt(Prefs.KEY_BOLT_SCALE, snapshot.boltScale)
+            prefs.putInt(Prefs.KEY_BOLT_ANIM, snapshot.boltAnim)
+            prefs.putInt(Prefs.KEY_BOLT_SPEED, snapshot.boltSpeed)
+            prefs.putInt(Prefs.KEY_DOT_SCALE, snapshot.dotScale)
+            prefs.putString(Prefs.KEY_OUT_ORDER, Prefs.encodeOutOrder(snapshot.outOrder))
+
+            prefs.putBoolean(Prefs.KEY_TRIO_MORPH, snapshot.trioMorph)
+            prefs.putInt(Prefs.KEY_TRIO_ROW_GAP, snapshot.trioRowGap)
+            prefs.putInt(Prefs.KEY_TRIO_DIGIT_SIZE, snapshot.trioDigitSize)
+            prefs.putInt(Prefs.KEY_TRIO_MORPH_DEBUG, snapshot.trioMorphDebug)
+            prefs.putBoolean(Prefs.KEY_TRIO_MORPH_TOAST, snapshot.trioMorphToast)
+            prefs.putBoolean(Prefs.KEY_TRAFFIC_ARROWS, snapshot.trafficArrows)
+            prefs.putBoolean(Prefs.KEY_MOBILE_TRAFFIC_ARROWS, snapshot.mobileTrafficArrows)
+            prefs.putBoolean(Prefs.KEY_TRIO_CHARGE_BREATH, snapshot.trioChargeBreath)
+            prefs.putInt(Prefs.KEY_TRIO_BT_BATTERY, snapshot.trioBtBattery)
+            prefs.putBoolean(Prefs.KEY_TRIO_COMPACT_ROW, snapshot.trioCompactRow)
+            prefs.putBoolean(Prefs.KEY_TRIO_KEEP_ICONS, snapshot.trioKeepIcons)
+            prefs.putBoolean(Prefs.KEY_CAPSULE_NO_SCALE, snapshot.capsuleNoScale)
+            prefs.putBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, snapshot.panelNativeIcons)
+
+            prefs.putBoolean(Prefs.KEY_DEBUG_LOG, current.getBoolean(Prefs.KEY_DEBUG_LOG, Prefs.DEF_DEBUG_LOG))
+        }
+
+    }
+
+    private fun writeBoolean(key: String, value: Boolean) {
+        preferences().edit(commit = true) { putBoolean(key, value) }
+        push { it.putBoolean(key, value) }
+
+    }
+
+    /** 一次事务写多个布尔键：用于互斥开关，避免读到的中间态出现「两个都开」。 */
+    private fun writeBooleans(vararg values: Pair<String, Boolean>) {
+        preferences().edit(commit = true) { values.forEach { (k, v) -> putBoolean(k, v) } }
+        push { e -> values.forEach { (k, v) -> e.putBoolean(k, v) } }
+    }
+
+    private fun writeInt(key: String, value: Int) {
+        preferences().edit(commit = true) { putInt(key, value) }
+        push { it.putInt(key, value) }
+
+    }
+
+    private fun writeString(key: String, value: String) {
+        preferences().edit(commit = true) { putString(key, value) }
+        push { it.putString(key, value) }
+
+    }
+
+    /**
+     * 设置改动不热应用（与 HonorHook / HonorDuoBar 一致）：写入只落本地与框架的
+     * remote preferences，改完必须重启 SystemUI 才生效。
+     *
+     * 上游还有一条「把整份快照广播给 SystemUI」的旁路，已删除：那个 action 字符串
+     * 沿用自 HonorDuo 上游，任何一台仍装着旧版 HonorDuo 的设备上，其已激活的钩子都会
+     * 收到本 App 的广播并立即应用——表现就是「本模块没在 LSPosed 激活也能改状态栏」。
+     */
+    private fun push(block: (SharedPreferences.Editor) -> Unit) {
+        val bound = service
+        if (bound == null) {
+            // Not fatal: onServiceBind replays every value through
+            // syncAllToFramework(), so the write is not lost. Logged because a
+            // silent return here looks exactly like "live updates are broken".
+            Log.w(TAG, "framework not bound, settings will sync on connect")
+            return
+        }
+        runCatching {
+            bound.getRemotePreferences(Prefs.NAME).edit(commit = true) {
+                block(this)
+            }
+        }.onFailure { Log.e(TAG, "cannot push settings to framework", it) }
+    }
+
+    private companion object {
+        const val TAG = "HonorDuo"
+    }
+}

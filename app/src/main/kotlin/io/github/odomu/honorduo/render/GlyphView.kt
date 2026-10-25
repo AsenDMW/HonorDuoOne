@@ -1,0 +1,163 @@
+/*
+ * Copyright (C) 2026 yixing233 and HyperDuo contributors
+ * Copyright (C) 2026 odomu and HonorDuo contributors
+ *
+ * This file is part of HonorDuo, a fork of HyperDuo, released under the GNU
+ * General Public License v3.0. See the LICENSE file at the repository root, or
+ * <https://www.gnu.org/licenses/gpl-3.0.html>.
+ *
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+
+package io.github.odomu.honorduo.render
+
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.PorterDuff
+import android.view.View
+import io.github.odomu.honorduo.hook.ScreenStateTracker
+import io.github.odomu.honorduo.model.TrioConfig
+import io.github.odomu.honorduo.model.TrioState
+import kotlin.math.roundToInt
+
+/**
+ * The trio glyph, drawn by a view of the module's own inside MagicOS' icon row.
+ *
+ * The status bar's right-hand group is `HwSystemIcons`, a plain horizontal
+ * `LinearLayout` holding the notification icons, the network-speed slots,
+ * `signalIcons` (the Wi-Fi + mobile cluster) and the battery. Adding one more
+ * child to it is safe - nothing in that row casts its children to an interface of
+ * its own - and it buys two things a drawable handed to the battery could not:
+ *
+ * - the glyph owns its **width** as well as its height, so the row reserves
+ *   exactly the space the arrangement needs (a capsule is 2.3x wider than the
+ *   ring) and closes up around it on its own;
+ * - the canvas, its bounds and its clip are still the platform's. This is a child
+ *   view, not an overlay window, so nothing is read as a tap-jacking surface and
+ *   nothing has to be kept in step with the bar.
+ *
+ * The height is the battery's own box - `lock_charge_height`, 17dp - so the
+ * glyph stands exactly as tall as the icon it replaces.
+ */
+internal class GlyphView(context: Context) : View(context) {
+
+    /**
+     * The row this glyph belongs to.
+     */
+    var state: TrioState? = null
+
+    init {
+        setWillNotDraw(false)
+        // Confine this view's per-frame CLEAR to a layer of its own.
+        setLayerType(LAYER_TYPE_HARDWARE, null)
+        // Never a touch target: MagicOS resolves the pull-down pivot from the view
+        // under the finger, and one it did not create comes back null.
+        isClickable = false
+        isFocusable = false
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val density = resources.displayMetrics.density
+        val offered = MeasureSpec.getSize(heightMeasureSpec)
+        val nominal = (NOMINAL_HEIGHT_DP * density).roundToInt()
+        val a = TrioConfig.appearance()
+        val hasBottomStacked = !a.capsule && !a.rect && !a.dataSimOnly && (
+            (a.ringZones.getOrNull(2)?.size ?: 0) > 1 ||
+            (a.ringZones.getOrNull(2)?.contains(io.github.odomu.honorduo.model.Prefs.PART_MOBILE) == true && a.dualSim)
+        )
+        // Reserve clearance for stacked signal 2 at bottom
+        val extraStackH = if (hasBottomStacked) 1.5f * density else 0f
+        val wanted = if (a.capsule) {
+            nominal + (2f * TrioGeometry.CAP_BAND_H * nominal / TrioGeometry.CAP_INK_H).roundToInt()
+        } else {
+            ((20.5f * density) + extraStackH).roundToInt()
+        }
+        val height = if (offered > 0) minOf(offered, wanted) else wanted
+        val baseWidth = (height * TrioGeometry.hostAspect(a)).roundToInt()
+        // Dynamically widen view as ring spacing widens to push sibling views and avoid clipping
+        val extraSpacingW = if (a.ring && a.ringSpacingX > 0) (2f * a.ringSpacingX * density).roundToInt() else 0
+        // While the pull-down morph runs, the row's width is the morph's width:
+        // the glyph fans out into the [Wi-Fi | pill | bars] row and the bar has
+        // to reserve the room, or the row would clip at the view's edges.
+        val morphNow = a.morphLive && TrioState.sMorphFraction > 0.001f
+        val width = if (morphNow && TrioRenderer.lastMorphWidthPx > 0) {
+            TrioRenderer.lastMorphWidthPx
+        } else {
+            1.coerceAtLeast(baseWidth + extraSpacingW)
+        }
+        setMeasuredDimension(
+            resolveSize(width, widthMeasureSpec),
+            resolveSize(height, heightMeasureSpec),
+        )
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val state = state ?: return
+        if (!TrioConfig.get().enabled || width <= 0 || height <= 0) return
+        // Read the live state on every frame: battery, signal and ink all change
+        // without anybody telling this view, and every one of those changes
+        // invalidates it through TrioHooks.
+        state.refresh()
+        // The glyph owns this view's whole box, and a plain View is not cleared
+        // for it between frames: the arcs' track and the unlit dots are
+        // translucent, so without this every repaint would stack a copy on the
+        // last one.
+        canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+        TrioRenderer.drawInto(
+            canvas, width, height,
+            state.level, state.charging, state.quickCharging, state.powerSave, state.low,
+            if (state.wifiPresent) state.wifiLevel else -1,
+            state.mobileLevel, state.slotLevels, state.mobileType,
+            state.foreground(), TrioConfig.get(), false,
+        )
+        // The morph's width is settled during the draw (only the frame knows
+        // which pieces have ink), so the view catches up with it afterwards:
+        // a disagreement wider than a pixel asks the row for a fresh measure.
+        val a = TrioConfig.appearance()
+        val morphNow = a.morphLive && TrioState.sMorphFraction > 0.001f
+        if (morphNow && TrioRenderer.lastMorphWidthPx > 0 &&
+            kotlin.math.abs(width - TrioRenderer.lastMorphWidthPx) > 1
+        ) {
+            requestLayout()
+        }
+        if (morphNow != lastMorphActive) {
+            lastMorphActive = morphNow
+            requestLayout()
+        }
+        // One frame asks for the next only while something actually moves: a still
+        // bolt, or an unplugged one, costs nothing. The breathing charge fill and
+        // an in-flight morph are frames too, so they keep the clock running.
+        val breathing = a.trioChargeBreath && state.charging && state.level in 0..99
+        if (ScreenStateTracker.isScreenOn &&
+            (a.animatesOutline(state.charging, state.level) || breathing || morphNow)
+        ) {
+            postInvalidateOnAnimation()
+        }
+        // 闪电只挂 5 秒：这帧还在窗口里就约一个到点重绘。不约的话，关掉充电动画
+        // 和呼吸填充后没有任何东西推动重绘，闪电会一直挂到下一次状态变化才消失。
+        if (ScreenStateTracker.isScreenOn) {
+            val boltLeft = TrioState.boltPromptRemainingMs(state.charging)
+            if (boltLeft > 0L && !boltExpiryPosted) {
+                boltExpiryPosted = true
+                postDelayed({
+                    boltExpiryPosted = false
+                    invalidate()
+                }, boltLeft)
+            }
+        } else {
+            boltExpiryPosted = false
+        }
+    }
+
+    /** 是否已经为闪电窗口的结束约过重绘。 */
+    private var boltExpiryPosted = false
+
+    /** Whether the last frame drew the morph; its flips need a fresh measure. */
+    private var lastMorphActive = false
+
+    /** The battery box's height on this ROM, in dp. */
+    private companion object {
+        const val NOMINAL_HEIGHT_DP = 17f
+    }
+}

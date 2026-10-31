@@ -140,6 +140,10 @@ class TrioSettings {
     @JvmField
     var hideBluetoothIcon = Prefs.DEF_HIDE_BLUETOOTH_ICON
 
+    /** Hides the privacy chip (camera/mic indicator); see [Prefs.KEY_HIDE_PRIVACY_CHIP]. */
+    @JvmField
+    var hidePrivacyChip = Prefs.DEF_HIDE_PRIVACY_CHIP
+
     /** 控制中心音量条长按弹媒体输出弹窗；见 [Prefs.KEY_CC_VOLUME_LONGPRESS]。 */
     @JvmField
     var ccVolumeLongpress = Prefs.DEF_CC_VOLUME_LONGPRESS
@@ -494,6 +498,7 @@ class TrioSettings {
             hideStatusClock = Prefs.DEF_HIDE_STATUS_CLOCK
             hideAlarmIcon = Prefs.DEF_HIDE_ALARM_ICON
             hideBluetoothIcon = Prefs.DEF_HIDE_BLUETOOTH_ICON
+            hidePrivacyChip = Prefs.DEF_HIDE_PRIVACY_CHIP
             ccVolumeLongpress = Prefs.DEF_CC_VOLUME_LONGPRESS
             dualSignal = Prefs.DEF_DUAL_SIGNAL
             dualSignalLabel = Prefs.DEF_DUAL_SIGNAL_LABEL
@@ -712,6 +717,7 @@ class TrioSettings {
             s.hideStatusClock = p.getBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, Prefs.DEF_HIDE_STATUS_CLOCK)
             s.hideAlarmIcon = p.getBoolean(Prefs.KEY_HIDE_ALARM_ICON, Prefs.DEF_HIDE_ALARM_ICON)
             s.hideBluetoothIcon = p.getBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, Prefs.DEF_HIDE_BLUETOOTH_ICON)
+            s.hidePrivacyChip = p.getBoolean(Prefs.KEY_HIDE_PRIVACY_CHIP, Prefs.DEF_HIDE_PRIVACY_CHIP)
             s.ccVolumeLongpress = p.getBoolean(Prefs.KEY_CC_VOLUME_LONGPRESS, Prefs.DEF_CC_VOLUME_LONGPRESS)
             s.dualSignal = p.getBoolean(Prefs.KEY_DUAL_SIGNAL, Prefs.DEF_DUAL_SIGNAL)
             s.dualSignalLabel = p.getBoolean(Prefs.KEY_DUAL_SIGNAL_LABEL, Prefs.DEF_DUAL_SIGNAL_LABEL)
@@ -1054,6 +1060,7 @@ class TrioSettings {
             s.hideStatusClock = bundle.getBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, Prefs.DEF_HIDE_STATUS_CLOCK)
             s.hideAlarmIcon = bundle.getBoolean(Prefs.KEY_HIDE_ALARM_ICON, Prefs.DEF_HIDE_ALARM_ICON)
             s.hideBluetoothIcon = bundle.getBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, Prefs.DEF_HIDE_BLUETOOTH_ICON)
+            s.hidePrivacyChip = bundle.getBoolean(Prefs.KEY_HIDE_PRIVACY_CHIP, Prefs.DEF_HIDE_PRIVACY_CHIP)
             s.ccVolumeLongpress =
                 bundle.getBoolean(Prefs.KEY_CC_VOLUME_LONGPRESS, Prefs.DEF_CC_VOLUME_LONGPRESS)
             s.dualSignal = bundle.getBoolean(Prefs.KEY_DUAL_SIGNAL, Prefs.DEF_DUAL_SIGNAL)
@@ -1774,6 +1781,7 @@ class TrioSettings {
             Prefs.KEY_HIDE_STATUS_CLOCK -> hideStatusClock = src.hideStatusClock
             Prefs.KEY_HIDE_ALARM_ICON -> hideAlarmIcon = src.hideAlarmIcon
             Prefs.KEY_HIDE_BLUETOOTH_ICON -> hideBluetoothIcon = src.hideBluetoothIcon
+            Prefs.KEY_HIDE_PRIVACY_CHIP -> hidePrivacyChip = src.hidePrivacyChip
             Prefs.KEY_CC_VOLUME_LONGPRESS -> ccVolumeLongpress = src.ccVolumeLongpress
             Prefs.KEY_DUAL_SIGNAL -> dualSignal = src.dualSignal
             Prefs.KEY_DUAL_SIGNAL_LABEL -> dualSignalLabel = src.dualSignalLabel
@@ -1924,6 +1932,7 @@ class TrioSettings {
         putBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, hideStatusClock)
         putBoolean(Prefs.KEY_HIDE_ALARM_ICON, hideAlarmIcon)
         putBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, hideBluetoothIcon)
+        putBoolean(Prefs.KEY_HIDE_PRIVACY_CHIP, hidePrivacyChip)
         putBoolean(Prefs.KEY_CC_VOLUME_LONGPRESS, ccVolumeLongpress)
         putBoolean(Prefs.KEY_DUAL_SIGNAL, dualSignal)
         putBoolean(Prefs.KEY_DUAL_SIGNAL_LABEL, dualSignalLabel)
@@ -2064,6 +2073,7 @@ class TrioSettings {
             hideStatusClock == other.hideStatusClock &&
             hideAlarmIcon == other.hideAlarmIcon &&
             hideBluetoothIcon == other.hideBluetoothIcon &&
+            hidePrivacyChip == other.hidePrivacyChip &&
             ccVolumeLongpress == other.ccVolumeLongpress &&
             dualSignal == other.dualSignal &&
             dualSignalLabel == other.dualSignalLabel &&

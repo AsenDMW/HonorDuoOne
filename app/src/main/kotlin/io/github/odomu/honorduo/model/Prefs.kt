@@ -130,6 +130,15 @@ object Prefs {
     const val DEF_HIDE_BLUETOOTH_ICON = false
 
     /**
+     * Hides the privacy chip — the green circle the bar shows while an app is using
+     * the camera or the microphone. Off by default. It is the only place the system
+     * says "something is watching", and a user who turns this on should have asked
+     * for it rather than discovered it missing.
+     */
+    const val KEY_HIDE_PRIVACY_CHIP = "hide_privacy_chip"
+    const val DEF_HIDE_PRIVACY_CHIP = false
+
+    /**
      * 控制中心音量条长按弹出荣耀媒体输出弹窗（与「媒体控件」磁贴右上角按钮同款）。
      * 源自 HonorDuoBar 1.1.3 的 CcVolumeLongPressFeature。
      */

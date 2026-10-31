@@ -222,6 +222,9 @@ internal object PanelExpansionHook {
             // Rows re-settle: native icons come back and the glyph hides while the
             // panel is open (and the other way round on collapse).
             StatusBarRowManager.syncAll(TrioConfig.appearance(), force = true)
+            // 面板展开/收起会翻转 bluetoothMerged（展开时还原生蓝牙图标、收起时
+            // 融合进字形），需重排原生图标可见性。只在翻转时调一次，不影响帧率。
+            StatusBarIconManager.applyIconVisibility()
         }
     }
 
@@ -330,6 +333,8 @@ internal object PanelExpansionHook {
                 if (TrioState.sPanelExpanded) {
                     TrioState.sPanelExpanded = false
                     StatusBarRowManager.syncAll(TrioConfig.appearance(), force = true)
+                    // 收起后 bluetoothMerged 重新生效，需隐藏原生蓝牙单件。
+                    StatusBarIconManager.applyIconVisibility()
                 }
                 return
             }

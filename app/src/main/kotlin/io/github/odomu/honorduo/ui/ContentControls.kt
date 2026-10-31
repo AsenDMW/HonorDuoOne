@@ -151,6 +151,8 @@ internal enum class ContentControl(val owner: TrioSettingsPart) {
     ClockStyle(TrioSettingsPart.Clock),
     HideAlarmIcon(TrioSettingsPart.Appearance),
     HideBluetoothIcon(TrioSettingsPart.Appearance),
+    /** The green camera/mic privacy dot removed from the status bar. */
+    HidePrivacyChip(TrioSettingsPart.Appearance),
     /** The secondary SIM's native signal icon removed from the status bar clusters. */
     HideSim2(TrioSettingsPart.Appearance),
     /** The native 5G/4G label beside the signal bars removed, bars untouched. */
@@ -279,6 +281,7 @@ internal fun ContentControl.searchLabel(): ContentSearchLabel? = when (this) {
     ContentControl.ClockStyle -> ContentSearchLabel(R.string.clock_layout_style_title)
     ContentControl.HideAlarmIcon -> ContentSearchLabel(R.string.hide_alarm_icon_title, R.string.hide_alarm_icon_summary)
     ContentControl.HideBluetoothIcon -> ContentSearchLabel(R.string.hide_bluetooth_icon_title, R.string.hide_bluetooth_icon_summary)
+    ContentControl.HidePrivacyChip -> ContentSearchLabel(R.string.hide_privacy_chip_title, R.string.hide_privacy_chip_summary)
     ContentControl.HideSim2 -> ContentSearchLabel(R.string.hide_sim2_title, R.string.hide_sim2_summary)
     ContentControl.HideNetType -> ContentSearchLabel(R.string.hide_net_type_title, R.string.hide_net_type_summary)
     ContentControl.TrioMorph -> ContentSearchLabel(R.string.trio_morph_title, R.string.trio_morph_summary)
@@ -544,6 +547,12 @@ internal fun ContentControlRow(
             summaryRes = R.string.hide_bluetooth_icon_summary,
             dependencies = listOf(settings.enabled to R.string.master_module_title),
         ) { value -> update { it.setHideBluetoothIcon(value) } }
+        ContentControl.HidePrivacyChip -> ContentToggle(
+            checked = settings.hidePrivacyChip,
+            title = R.string.hide_privacy_chip_title,
+            summaryRes = R.string.hide_privacy_chip_summary,
+            dependencies = listOf(settings.enabled to R.string.master_module_title),
+        ) { value -> update { it.setHidePrivacyChip(value) } }
         ContentControl.HideSim2 -> ContentToggle(
             checked = settings.hideSim2,
             title = R.string.hide_sim2_title,

@@ -51,8 +51,8 @@ internal object TrioHooks {
     fun install(module: XposedModule, cl: ClassLoader) {
         sModule = module
         TrioConfig.install(module)
-        // 设置改动不热应用：与 HonorHook / HonorDuoBar 一致，改完需要重启 SystemUI 才生效。
-        // 这里刻意不再 addListener，TrioConfig 也只在进程启动时读一次。
+        // 设置改动不热应用：改完（含恢复备份）需要重启 SystemUI 才生效。
+        // 这里刻意不 addListener，TrioConfig 也只在进程启动时读一次。
 
         StatusBarRowManager.initFields(Refl.cls("com.android.systemui.statusbar.HwSystemIcons", cl) ?: Any::class.java)
 
@@ -87,6 +87,7 @@ internal object TrioHooks {
         StatusBarRowManager.syncAll(a, force = true)
         BarClockManager.sync(a)
         StatusBarIconManager.applyIconVisibility(a)
+        SystemBarHook.applyPrivacyChipVisibility(a)
         StatusBarIconHook.updateConfig(
             a.replaceWifiIcon,
             a.replaceStatusIcon,

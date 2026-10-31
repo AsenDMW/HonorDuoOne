@@ -294,6 +294,8 @@
     <string name="hide_alarm_icon_summary">Hides the alarm icon in the status bar; the alarm still rings as usual.</string>
     <string name="hide_bluetooth_icon_title">Hide Bluetooth</string>
     <string name="hide_bluetooth_icon_summary">Hides the Bluetooth icon in the status bar; the connection and audio are unaffected.</string>
+    <string name="hide_privacy_chip_title">Hide Privacy Indicator</string>
+    <string name="hide_privacy_chip_summary">Hides the green dot on the right of the status bar shown while an app is using the camera or microphone. Off by default; once on you can no longer tell from the status bar whether an app is recording.</string>
     <string name="clock_weather_style_title">Weather style</string>
     <string name="weather_style_text">Text only</string>
     <string name="weather_style_icon">Vector icon</string>

@@ -28,11 +28,13 @@ android {
         minSdk = 29
         //noinspection TargetSdkVersionUpdate
         targetSdk = 37
-        // 1.0.1（142）：公开发布第二版。合并 1.0.0 之后全部内测迭代（双排信号 Duo 画法、
-        // 下拉卡顿修复、模块生效范围、蓝牙电量门控、左右两侧组件等），
-        // 详见 docs/release-notes/release-notes-1.0.1.md。
-        versionCode = tagVersionCode ?: 142
-        versionName = tagVersionName ?: "1.0.1"
+        // 1.1.0（150）：正式发布版。同步 Duo 1.0.6 — 新增隐藏隐私指示开关；修复横屏下拉
+        // 时钟缩成一点（maxHeight=0 时不缩放字号）；行重新布局后自动补回时钟；hookVisibility
+        // 用 VISIBILITY_FLAGS 掩码减少无谓遍历；修复蓝牙电量组件显示时下拉卡顿
+        // （applyIconVisibility 仅在未知↔已知翻转时调用）；恢复备份时补推时钟偏移/行距/
+        // 农历/日期星期格式/颜色与生效范围等漏推键（仍按本模块设计需重启 SystemUI 后生效）。
+        versionCode = tagVersionCode ?: 150
+        versionName = tagVersionName ?: "1.1.0"
 
         buildConfigField("String", "REPO_SLUG", "\"$repoSlug\"")
     }

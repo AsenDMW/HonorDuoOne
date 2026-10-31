@@ -190,6 +190,22 @@ internal object BarClockManager {
         }
     }
 
+    /**
+     * The bar's own clock is replaced whenever the host re-inflates the row, and no hook
+     * of ours sees that swap. A layout pass does, and this is what it asks: cheap enough
+     * to run on every layout (two booleans unless the view is missing), and it re-adds
+     * the clock instead of waiting for the next settings change to do it.
+     */
+    fun requestOnLayout(a: TrioAppearance = TrioConfig.appearance()) {
+        if (!a.enabled || !a.drawsBarClock() || a.barClockHidden ||
+            StatusBarRowManager.suppressed || (a.glyph && a.hidesStatusClock())
+        ) return
+        val view = sBarClockView
+        val parent = sBarClock?.get()?.parent
+        if (view != null && view.isAttachedToWindow && parent != null && view.parent === parent) return
+        sync(a)
+    }
+
     private fun removeBarClock() {
         sBarClockLoop = false
         sBarClockToken++
@@ -557,7 +573,10 @@ internal object BarClockManager {
                 needed += lineHeight(baseSize * bottomFactor) + (if (hasTopRow) rowGap else 0f)
             }
             val room = maxHeight.toFloat()
-            if (needed > 0f && needed > room) {
+            // 状态栏高度还没测出的那一帧（横屏下拉时常见），room 为 0。
+            // 此时若按 room/needed 缩放，timeSize 会被压成 0，时钟缩成看不见的一点。
+            // 只有高度已知且内容确实放不下时才缩放。
+            if (room > 0f && needed > 0f && needed > room) {
                 scale = room / needed
             }
             val budget = if (availW > 0) {

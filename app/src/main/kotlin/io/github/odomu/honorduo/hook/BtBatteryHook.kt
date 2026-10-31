@@ -85,11 +85,17 @@ internal object BtBatteryHook {
                     ?: return@runCatching
                 val v = (Refl.get(levelField, controller) as? Number)?.toInt() ?: -1
                 if (v != TrioState.sBtBatteryLevel) {
+                    val wasKnown = TrioState.sBtBatteryLevel in 0..100
                     TrioState.sBtBatteryLevel = v
+                    val nowKnown = v in 0..100
                     mainHandler.post {
                         TrioHooks.invalidateHosts()
-                        // 电量已知→融合态生效，原生蓝牙单件随之隐藏；断开/未知→交还宿主。
-                        StatusBarIconManager.applyIconVisibility()
+                        // 仅在蓝牙融合态翻转（未知↔已知）时重排原生图标可见性。
+                        // 电量在 1-100 之间微调不影响融合态，递归遍历整个状态栏视图树
+                        // （含反射读 mSlot）会把下拉状态栏拖卡，故跳过。
+                        if (wasKnown != nowKnown) {
+                            StatusBarIconManager.applyIconVisibility()
+                        }
                     }
                 }
                 if (v !in 0..100) {

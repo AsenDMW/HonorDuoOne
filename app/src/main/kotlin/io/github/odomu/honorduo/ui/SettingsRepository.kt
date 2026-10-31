@@ -250,6 +250,7 @@ class SettingsRepository(context: Context) {
     fun setHideStatusClock(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, value)
     fun setHideAlarmIcon(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_ALARM_ICON, value)
     fun setHideBluetoothIcon(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, value)
+    fun setHidePrivacyChip(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_PRIVACY_CHIP, value)
 
     /** 控制中心音量条长按弹荣耀媒体输出弹窗（HonorDuoBar 1.1.3）。 */
     fun setCcVolumeLongpress(value: Boolean) = writeBoolean(Prefs.KEY_CC_VOLUME_LONGPRESS, value)
@@ -509,6 +510,8 @@ class SettingsRepository(context: Context) {
         push { prefs ->
             prefs.putBoolean(Prefs.KEY_ENABLED, snapshot.enabled)
             prefs.putBoolean(Prefs.KEY_MERGE_ICONS, snapshot.mergeIcons)
+            // 生效范围也要随恢复备份整批推送，否则恢复后仍按旧掩码生效。
+            prefs.putInt(Prefs.KEY_EFFECTIVE_SCOPE, Prefs.normalizeScope(snapshot.effectiveScope))
             prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_WIFI, style), snapshot.showWifi)
             prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_MOBILE, style), snapshot.showMobile)
             prefs.putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_VALUE, style), snapshot.showValue)
@@ -531,6 +534,21 @@ class SettingsRepository(context: Context) {
             prefs.putBoolean(Prefs.KEY_CLOCK_SECONDS, snapshot.clockSeconds)
             prefs.putBoolean(Prefs.KEY_CLOCK_DATE, snapshot.clockDate)
             prefs.putBoolean(Prefs.KEY_CLOCK_WEEKDAY, snapshot.clockWeekday)
+            // 时钟的偏移、行距、农历、日期/星期格式与各自颜色。恢复备份时会一并推送，
+            // 否则这些键只留在本地，SystemUI 侧仍是旧值，要再手动改一次才显示。
+            prefs.putInt(Prefs.KEY_CLOCK_TOP_OFFSET_X, snapshot.clockTopOffsetX)
+            prefs.putInt(Prefs.KEY_CLOCK_BOTTOM_OFFSET_X, snapshot.clockBottomOffsetX)
+            prefs.putInt(Prefs.KEY_CLOCK_LUNAR_GAP, snapshot.clockLunarGap)
+            prefs.putInt(Prefs.KEY_CLOCK_ROW_GAP, snapshot.clockRowGap)
+            prefs.putBoolean(Prefs.KEY_CLOCK_LUNAR, snapshot.clockLunar)
+            prefs.putInt(Prefs.KEY_CLOCK_DATE_FORMAT, snapshot.clockDateFormat)
+            prefs.putInt(Prefs.KEY_CLOCK_WEEKDAY_FORMAT, snapshot.clockWeekdayFormat)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_WEEKDAY_ON_DARK, snapshot.clockWeekdayColorOnDark)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_WEEKDAY_ON_LIGHT, snapshot.clockWeekdayColorOnLight)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_DATE_ON_DARK, snapshot.clockDateColorOnDark)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_DATE_ON_LIGHT, snapshot.clockDateColorOnLight)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_LUNAR_ON_DARK, snapshot.clockLunarColorOnDark)
+            prefs.putInt(Prefs.KEY_COLOR_CLOCK_LUNAR_ON_LIGHT, snapshot.clockLunarColorOnLight)
             prefs.putBoolean(Prefs.KEY_CLOCK_WEATHER, snapshot.clockWeather)
             prefs.putInt(Prefs.KEY_CLOCK_WEATHER_STYLE, snapshot.clockWeatherStyle)
             prefs.putInt(Prefs.KEY_CLOCK_STYLE, snapshot.clockStyle)
@@ -539,6 +557,7 @@ class SettingsRepository(context: Context) {
             prefs.putBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, snapshot.hideStatusClock)
             prefs.putBoolean(Prefs.KEY_HIDE_ALARM_ICON, snapshot.hideAlarmIcon)
             prefs.putBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, snapshot.hideBluetoothIcon)
+            prefs.putBoolean(Prefs.KEY_HIDE_PRIVACY_CHIP, snapshot.hidePrivacyChip)
             prefs.putBoolean(Prefs.KEY_SHADE_LUNAR, snapshot.shadeLunar)
             prefs.putBoolean(Prefs.KEY_SHADE_WEATHER, snapshot.shadeWeather)
             prefs.putInt(Prefs.KEY_SHADE_WEATHER_STYLE, snapshot.shadeWeatherStyle)

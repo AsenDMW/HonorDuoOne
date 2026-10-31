@@ -223,6 +223,10 @@ internal object StatusBarRowManager {
                 StatusBarIconManager.hide(row.battery)
             }
         }
+        // 宿主重新 inflate 行时会替换掉时钟 View，但我们的 hook 看不到这次替换。
+        // 只有布局是必然发生的，在这里补一次：时钟缺了就重新挂回，
+        // 不必等下一次设置变更才恢复。
+        BarClockManager.requestOnLayout(a)
         StatusBarIconManager.settle(row.container, a)
         syncOutViews(row)
         if (force || row.lastStyle != a.style) {
@@ -258,7 +262,9 @@ internal object StatusBarRowManager {
     }
 
     private fun mountGlyph(row: Row) {
-        if (row.glyph != null) return
+        if (inRow(row, row.glyph) != null) return
+        remove(row, row.glyph)
+        row.glyph = null
         val glyph = GlyphView(row.row.context).also { it.state = row.state }
         val at = row.container.indexOfChild(row.battery)
         row.container.addView(
@@ -352,13 +358,14 @@ internal object StatusBarRowManager {
             return
         }
         val density = row.row.resources.displayMetrics.density
-        var signal = row.signal
-        if (signal == null) {
-            signal = OutSignalView(row.row.context)
-            insertBefore(row, signal)
-            row.signal = signal
-            row.outOrderApplied = null
+        val signal = inRow(row, row.signal) ?: run {
+            remove(row, row.signal)
+            OutSignalView(row.row.context).also {
+                insertBefore(row, it)
+                row.outOrderApplied = null
+            }
         }
+        row.signal = signal
         signal.host = row.state
         val rowHeight = row.row.height
         val reading = IntArray(2)
@@ -494,13 +501,14 @@ internal object StatusBarRowManager {
             return
         }
         val density = row.row.resources.displayMetrics.density
-        var perf = row.perf
-        if (perf == null) {
-            perf = PerfLabel(row.row.context)
-            insertBefore(row, perf)
-            row.perf = perf
-            row.outOrderApplied = null
+        val perf = inRow(row, row.perf) ?: run {
+            remove(row, row.perf)
+            PerfLabel(row.row.context).also {
+                insertBefore(row, it)
+                row.outOrderApplied = null
+            }
         }
+        row.perf = perf
         perf.host = row.state
         row.state.refresh()
         val text = perfText(a, row.state)
@@ -559,13 +567,14 @@ internal object StatusBarRowManager {
             return
         }
         val density = row.row.resources.displayMetrics.density
-        var label = row.fps
-        if (label == null) {
-            label = PerfLabel(row.row.context)
-            insertBefore(row, label)
-            row.fps = label
-            row.outOrderApplied = null
+        val label = inRow(row, row.fps) ?: run {
+            remove(row, row.fps)
+            PerfLabel(row.row.context).also {
+                insertBefore(row, it)
+                row.outOrderApplied = null
+            }
         }
+        row.fps = label
         label.host = row.state
         if (text != label.text.toString()) {
             label.text = text
@@ -605,13 +614,14 @@ internal object StatusBarRowManager {
             return
         }
         val density = row.row.resources.displayMetrics.density
-        var label = row.type
-        if (label == null) {
-            label = OutTypeLabel(row.row.context)
-            insertBefore(row, label)
-            row.type = label
-            row.outOrderApplied = null
+        val label = inRow(row, row.type) ?: run {
+            remove(row, row.type)
+            OutTypeLabel(row.row.context).also {
+                insertBefore(row, it)
+                row.outOrderApplied = null
+            }
         }
+        row.type = label
         label.host = row.state
         row.state.refresh()
         val text = row.state.mobileType
@@ -668,6 +678,18 @@ internal object StatusBarRowManager {
             // already gone
         }
     }
+
+    /**
+     * [view] when it is still a child of the row, `null` when the host took it away.
+     *
+     * The host re-inflates and re-themes the container without telling us, and it removes
+     * our children on the way. The field then still points at a parentless view, and every
+     * `if (view == null)` mount check kept answering "already mounted" — the glyph, the
+     * signal reading, the readouts and the type label stayed gone until the row object
+     * itself was rebuilt.
+     */
+    private fun <T : View> inRow(row: Row, view: T?): T? =
+        view?.takeIf { it.parent === row.container }
 
     private fun unmountOutViews(row: Row) {
         remove(row, row.signal)

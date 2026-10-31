@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import io.github.libxposed.api.XposedModule
 import io.github.odomu.honorduo.model.Prefs
+import io.github.odomu.honorduo.model.TrioAppearance
 import io.github.odomu.honorduo.model.TrioConfig
 import io.github.odomu.honorduo.model.TrioState
 import io.github.odomu.honorduo.render.TrioRenderer
@@ -23,6 +24,15 @@ import java.util.ArrayList
  */
 internal object SystemBarHook {
 
+    /** Only visibility-related setFlags writes need the suppression pass. */
+    private const val VISIBILITY_FLAGS = 0x0000000C
+
+    private class PrivacyChipState(view: View) {
+        val view = WeakReference(view)
+        var hiddenVisibility: Int? = null
+    }
+    private val privacyChips = ArrayList<PrivacyChipState>()
+
     /**
      * Installs all status bar view and container hooks into the target ClassLoader.
      *
@@ -38,6 +48,7 @@ internal object SystemBarHook {
         hooked += hookContents(module, cl)
         hooked += hookClockFace(module, cl)
         hooked += hookTint(module, cl)
+        hooked += hookPrivacyChip(module, cl)
         return hooked
     }
 
@@ -221,7 +232,8 @@ internal object SystemBarHook {
         return TrioHooks.hook(module, method, "honorduo-visibility") { chain ->
             val result = chain.proceed()
             val self = chain.thisObject
-            if (self is View) {
+            val mask = (chain.getArg(1) as? Number)?.toInt() ?: 0
+            if (self is View && (mask and VISIBILITY_FLAGS) != 0) {
                 StatusBarIconManager.enforceSuppression(self)
             }
             result
@@ -316,5 +328,68 @@ internal object SystemBarHook {
                 ((scope and Prefs.SCOPE_BIT_KEYGUARD) != 0 && ScopeTracker.lockscreenActive)
             )
         StatusBarRowManager.setSuppressed(excluded)
+    }
+
+    /**
+     * Hooks `HwNotchStatusBar.togglePrivacyChip` to hide the green camera/mic
+     * indicator when the user asked for it.
+     */
+    private fun hookPrivacyChip(module: XposedModule, cl: ClassLoader): Int {
+        val bar = Refl.cls("com.android.systemui.statusbar.phone.HwNotchStatusBar", cl) ?: return 0
+        val toggle = TrioHooks.methodNamed(bar, "togglePrivacyChip", 2) ?: return 0
+        return TrioHooks.hook(module, toggle, "honorduo-privacy-chip") { chain ->
+            chain.proceed()
+            val chip = chain.getArg(0) as? View
+            val show = chain.getArg(1) as? Boolean ?: false
+            if (chip != null) updatePrivacyChip(chip, show)
+            null
+        }
+    }
+
+    /** Records only live show events; release our visibility before the host reuses a chip. */
+    private fun updatePrivacyChip(chip: View, show: Boolean) {
+        for (i in privacyChips.indices.reversed()) {
+            val state = privacyChips[i]
+            val view = state.view.get()
+            if (view == null) {
+                privacyChips.removeAt(i)
+            } else if (view === chip) {
+                if (show) {
+                    setPrivacyChipHidden(state, chip, TrioConfig.appearance().hidePrivacyChip)
+                } else {
+                    setPrivacyChipHidden(state, chip, false)
+                    privacyChips.removeAt(i)
+                }
+                return
+            }
+        }
+        if (show) {
+            val state = PrivacyChipState(chip)
+            privacyChips.add(state)
+            setPrivacyChipHidden(state, chip, TrioConfig.appearance().hidePrivacyChip)
+        }
+    }
+
+    /** Applies settings to all shown chip instances, including master-switch hand-back. */
+    fun applyPrivacyChipVisibility(a: TrioAppearance) {
+        for (i in privacyChips.indices.reversed()) {
+            val state = privacyChips[i]
+            val chip = state.view.get()
+            if (chip == null) privacyChips.removeAt(i)
+            else setPrivacyChipHidden(state, chip, a.hidePrivacyChip)
+        }
+    }
+
+    private fun setPrivacyChipHidden(state: PrivacyChipState, chip: View, hide: Boolean) {
+        if (hide) {
+            if (chip.visibility != View.GONE) {
+                if (state.hiddenVisibility == null) state.hiddenVisibility = chip.visibility
+                chip.visibility = View.GONE
+            }
+        } else {
+            val previous = state.hiddenVisibility ?: return
+            state.hiddenVisibility = null
+            if (chip.visibility == View.GONE) chip.visibility = previous
+        }
     }
 }

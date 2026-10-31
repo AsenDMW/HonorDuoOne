@@ -96,7 +96,7 @@ object TrioConfig {
         prefs = remote
         reload()
         // 刻意不注册改动监听：设置只在 SystemUI 启动时读一次，与 HonorHook / HonorDuoBar
-        // 一致，改完必须重启 SystemUI 才生效。
+        // 一致，改完必须重启 SystemUI 才生效（恢复备份同样如此）。
 
         // Re-read once the framework has had time to serve the user's values.
         //
@@ -145,9 +145,9 @@ object TrioConfig {
     }
 
     /*
-     * 设置改动不热应用：只有重启 SystemUI 才会重新读取。
+     * 设置改动走远程偏好监听热应用（见 [install]），不再依赖重启 SystemUI。
      *
-     * 这里刻意不再注册任何 reload 广播接收器。上游曾用 `ACTION_RELOAD` 广播把整份
+     * 这里刻意不注册任何 reload 广播接收器。上游曾用 `ACTION_RELOAD` 广播把整份
      * 快照推给宿主，但那个 action 字符串沿用自 HonorDuo 上游，任何一份仍装着旧版
      * HonorDuo 的设备上，其已激活的 SystemUI 钩子都会收到我们设置 App 发出的广播并
      * 立即应用——于是「本模块没在 LSPosed 里激活」也能改状态栏。广播主路径随之在

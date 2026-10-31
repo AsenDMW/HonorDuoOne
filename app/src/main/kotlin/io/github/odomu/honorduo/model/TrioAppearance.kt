@@ -245,6 +245,9 @@ class TrioAppearance(c: TrioSettings) {
     /** The bar's Bluetooth icon is hidden; see [Prefs.KEY_HIDE_BLUETOOTH_ICON]. */
     @JvmField val hideBluetoothIcon: Boolean = c.hideBluetoothIcon
 
+    /** The privacy chip (camera/mic indicator) is hidden; see [Prefs.KEY_HIDE_PRIVACY_CHIP]. */
+    @JvmField val hidePrivacyChip: Boolean = c.hidePrivacyChip
+
     /** 控制中心音量条长按弹媒体输出弹窗；见 [Prefs.KEY_CC_VOLUME_LONGPRESS]。 */
     @JvmField val ccVolumeLongpress: Boolean = c.ccVolumeLongpress
     @JvmField val clockSeconds: Boolean = c.clockSeconds

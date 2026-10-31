@@ -14,8 +14,6 @@ package io.github.odomu.honorduo.hook
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.SystemClock
 import android.provider.Settings
@@ -32,21 +30,20 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import io.github.libxposed.api.XposedModule
 import io.github.odomu.honorduo.model.TrioConfig
-import io.github.odomu.honorduo.model.TrioState
+import io.github.odomu.honorduo.render.TrioRenderer
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.roundToInt
 
 /**
- * Dual-row cellular signal, drawn by the module itself (rendering scheme ported from
- * HonorHook's DualSignalFeature, which ports com.mod.dualsignal 3.3.4 - the original
- * author's visual constants are kept verbatim).
+ * Dual-row cellular signal, drawn by the module itself (rendering delegated to
+ * [TrioRenderer.drawOutSignal] - the same code path as the out-of-ring SIM reading).
  *
  * Behaviour:
  * - After `onAttachedToWindow` on the signal cluster views, walks the cluster for the
  *   `mobile_combo` group, hides the native group and injects a self-drawn container
- *   (upper row of bars for the primary SIM, lower row of dots for the secondary SIM)
- *   plus an optional network-type label.
+ *   (the out-signal reading: capsule bars for the primary SIM, a dot row - or a second
+ *   bar row with the stacked style - for the secondary SIM, plus the data-activity
+ *   arrows when 「显示流量活动图标」 is on) and an optional network-type label.
  * - Signal levels are read directly from TelephonyManager/SubscriptionManager rather
  *   than from the host's StateFlow; a 250 ms-throttled global-layout listener, a 2 s
  *   self-rescheduling refresh and a per-frame Choreographer colour sync keep the
@@ -82,26 +79,9 @@ internal object DualSignalHook {
     private const val TAG_SIGNAL = "hd_dual_signal"
     private const val TAG_LABEL = "hd_dual_label"
 
-    // ---- Visual constants (ported verbatim from DualSignal 3.3.4; do not retune) ----
-
-    private const val BAR_W_DP = 3.1f
-    private const val BAR_GAP_DP = 2.0f
-    private const val BAR_MAX_H_DP = 7.6f          // dual rows: bars squashed to fit the bar's height
-    private const val SINGLE_BAR_MAX_H_DP = 11.0f  // single SIM: not squashed
-    private const val ROW_GAP_DP = 1.6f
-    private const val DIM_ALPHA = 64               // alpha of the unlit bars
-
-    // 流量箭头组件（与胶囊里的 PART_TRAFFIC 同一视觉规格）：画在柱状图右侧，
-    // 左半移动数据、右半 Wi-Fi，未连接的一侧画更暗的灰。
-    private const val ARROWS_GAP_DP = 1.4f         // 柱状图与箭头组件的间距
-    private const val ARROWS_BLOCK_DP = 4.6f       // 组件整块宽（两对三角在内）
-    private const val ARROW_HALF_W_DP = 0.85f
-    private const val ARROW_HALF_H_DP = 0.58f
-    private const val ARROW_DY_DP = 1.0f           // 上/下三角到组件中线的距离
     // Right margin fixed at 2dp; left margin dynamic, tightened to 0dp against text neighbours.
     private const val HOST_MARGIN_DP = 2.0f
     private const val HOST_MARGIN_TEXT_DP = 0.0f
-    private val BAR_H_RATIO = floatArrayOf(0.48f, 0.6f, 0.79f, 1.0f)
 
     // ---- Type-label visual constants (upstream ensureContainer values) ----
 
@@ -201,14 +181,14 @@ internal object DualSignalHook {
         sEnabled = enabled
         sLabelEnabled = label
         try {
-            if (enabled && !wasEnabled) {
+            if (sEnabled && !wasEnabled) {
                 for (root in roots.keys) {
                     root.post { safeRestyle(root) }
                 }
             }
             for ((host, group) in groups) {
-                maintain(host, group)
-                if (enabled && !TrioConfig.appearance().foldsMobile()) {
+                maintain(host, group, force = true)
+                if (sEnabled && !TrioConfig.appearance().foldsMobile()) {
                     startTickers(host)
                 } else {
                     stopTickers(host)
@@ -271,10 +251,11 @@ internal object DualSignalHook {
         }
     }
 
-    /** 两条循环是否还有理由继续：功能开着、亮屏、宿主仍挂在窗口上、且没有让位给三合一。 */
+    /** 两条循环是否还有理由继续：功能开着、亮屏、宿主仍挂在窗口上、且没有让位给三合一或生效范围。 */
     private fun loopAllowed(host: FrameLayout): Boolean =
         sEnabled && ScreenStateTracker.isScreenOn && host.isAttachedToWindow &&
-            !TrioConfig.appearance().foldsMobile() && groups.containsKey(host)
+            !TrioConfig.appearance().foldsMobile() && !StatusBarRowManager.suppressed &&
+            groups.containsKey(host)
 
     private fun startTickers(host: FrameLayout) {
         startRefreshTicker(host)
@@ -297,7 +278,7 @@ internal object DualSignalHook {
                     return
                 }
                 try {
-                    groups[host]?.let { maintain(host, it) }
+                    groups[host]?.let { maintain(host, it, force = true) }
                 } catch (t: Throwable) {
                     TrioHooks.log(TrioHooks.LOG_WARN, "dual-signal refresh failed: $t")
                 }
@@ -404,7 +385,7 @@ internal object DualSignalHook {
         if (firstTime) maintained[host] = true
         groups[host] = group
         ensureContainer(host)
-        maintain(host, group)
+        maintain(host, group, force = true)
 
         if (firstTime) {
             // Path 1: follow the host's relayouts (rebuilds, SIM swaps, tint changes).
@@ -433,7 +414,7 @@ internal object DualSignalHook {
      * tint / label fresh, the host ordered before Wi-Fi and its margins tight. Any step
      * failing is swallowed by the callers.
      */
-    private fun maintain(host: FrameLayout, group: LinearLayout) {
+    private fun maintain(host: FrameLayout, group: LinearLayout, force: Boolean = false) {
         if (backedOff[host] == true) return
         probeDualSignalPackageOnce(host.context)
         // The plugin's container can appear after our injection (hook order is not
@@ -446,7 +427,7 @@ internal object DualSignalHook {
         val a = TrioConfig.appearance()
         val trioOwns = a.foldsMobile()
         val container = findContainer(host)
-        if (!sEnabled || trioOwns) {
+        if (!sEnabled || trioOwns || StatusBarRowManager.suppressed) {
             // Stepping aside: hide the own reading. The native group is only touched
             // when the trio does not own it - while it does, hiding it is the trio's job.
             container?.let { if (it.visibility != View.GONE) it.visibility = View.GONE }
@@ -462,8 +443,10 @@ internal object DualSignalHook {
         val signal = findSignal(live)
         val label = findLabel(live)
 
-        val ctx = host.context
-        val simCount = getSimCount(ctx).let { if (it < 0) 2 else it }
+        // 布局路径不读电话状态：只有 [force] 为真时才跨进程查一次（首次接管、改配置、
+        // 2 秒一次的维护），其余时候一律用缓存值。
+        if (force) readReadings(host.context)
+        val simCount = cachedSimCount
         if (simCount == 0) {
             if (live.visibility != View.GONE) live.visibility = View.GONE
             return
@@ -474,13 +457,13 @@ internal object DualSignalHook {
         signal?.setColor(color)
         label?.setTextColor(color)   // the label wears the signal's colour
 
-        val levels = getActiveLevels(ctx)
-        val mainLevel = levels.getOrElse(0) { 4 }
-        val subLevel = levels.getOrNull(1)
-        signal?.setInfo(simCount, mainLevel, subLevel)
-        signal?.setShowArrows(a.dualSignalArrows)
+        signal?.setInfo(
+            simCount,
+            cachedLevels.getOrElse(0) { 4 },
+            cachedLevels.getOrNull(1),
+        )
 
-        updateLabel(ctx, label)
+        updateLabel(label)
 
         moveBeforeWifi(host)
 
@@ -680,28 +663,38 @@ internal object DualSignalHook {
         }
     }
 
-    // ---- Level reading (the SystemUI process holds the permissions; failures fall back) ----
+    // ---- Level reading (the SystemUI process holds the permissions; failures keep the last reading) ----
 
-    private fun getSimCount(ctx: Context): Int = runCatching {
-        val sm = ctx.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
-            ?: return -1
-        sm.activeSubscriptionInfoList?.size ?: 0
-    }.getOrDefault(-1)
+    /**
+     * 缓存的读数。
+     *
+     * 下拉状态栏时窗口几乎每一帧都在 layout，而全局布局监听原来每次都要查
+     * `activeSubscriptionInfoList`（一次读回整份 SubscriptionInfo 列表）和每张卡的
+     * `signalStrength`：都是跨进程调用，单次就可能十几毫秒，正好吃掉拖拽中的那几帧。
+     * 现在读数只在这三处刷新：首次接管、改配置、2 秒一次的维护；布局路径只用缓存值。
+     */
+    private var cachedSimCount = 2
+    private var cachedLevels: List<Int> = emptyList()
+    private var cachedLabel: String? = null
 
-    /** Signal level per active SIM in slot order (0..4; a failed read reports full). */
-    private fun getActiveLevels(ctx: Context): List<Int> = runCatching {
-        val sm = ctx.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
-        val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-        val subs = sm?.activeSubscriptionInfoList
-        if (tm == null || subs.isNullOrEmpty()) {
-            return emptyList()
-        }
-        subs.sortedBy { it.simSlotIndex }.map { s ->
-            runCatching {
-                tm.createForSubscriptionId(s.subscriptionId).signalStrength?.level ?: 4
-            }.getOrDefault(4)
-        }
-    }.getOrDefault(emptyList())
+    /** 一次读取替换掉原来的 getSimCount + getActiveLevels 两次查询，只拉一遍订阅列表。 */
+    private fun readReadings(ctx: Context) {
+        val subs = runCatching {
+            (ctx.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager)
+                ?.activeSubscriptionInfoList
+        }.getOrNull() ?: return  // 读失败：保留上一次的读数
+        cachedSimCount = subs.size
+        cachedLevels = runCatching {
+            val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                ?: return@runCatching emptyList<Int>()
+            subs.sortedBy { it.simSlotIndex }.map { s ->
+                runCatching {
+                    tm.createForSubscriptionId(s.subscriptionId).signalStrength?.level ?: 4
+                }.getOrDefault(4)
+            }
+        }.getOrDefault(emptyList())
+        cachedLabel = if (sLabelEnabled && isMobileDataEnabled(ctx)) getNetworkLabel(ctx) else null
+    }
 
     // ---- Type-label data chain ----
 
@@ -742,9 +735,9 @@ internal object DualSignalHook {
      * anything else hides it. Unlike the upstream there is no Wi-Fi gate - the native
      * bar shows the cellular type alongside Wi-Fi too.
      */
-    private fun updateLabel(ctx: Context, label: TextView?) {
+    private fun updateLabel(label: TextView?) {
         if (label == null) return
-        val text = if (sLabelEnabled && isMobileDataEnabled(ctx)) getNetworkLabel(ctx) else null
+        val text = cachedLabel
         if (text.isNullOrEmpty()) {
             if (label.visibility != View.GONE) label.visibility = View.GONE
             return
@@ -759,36 +752,24 @@ internal object DualSignalHook {
     private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
     /**
-     * The drawn dual-row signal: four rounded bars for the primary SIM's level over
-     * four dots for the secondary SIM's; unlit bars are dimmed. The lower row exists
-     * only with two SIMs; one SIM restores the unsquashed single-row height.
+     * The drawn dual-row signal. Rendering is delegated to [TrioRenderer.drawOutSignal] -
+     * the exact code path that draws the out-of-ring SIM reading: capsule bars with the
+     * dot row beneath for the second card, the compact two-row style when the stacked
+     * style is selected, and the data-activity arrows when 「显示流量活动图标」 is on.
+     * The view only supplies the box (sized from the out-signal appearance) and the
+     * readings, which come straight from TelephonyManager rather than TrioState.
      */
     private class DualSignalBarsView(context: Context) : View(context) {
-        private var simCount = 2
         private var dual = true
         private var mainLevel = 4
         private var subLevel = 4
         private var color = Color.WHITE
-        private var showArrows = true
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val rect = RectF()
-        private val arrow = android.graphics.Path()
-
-        /** 流量箭头开关；关掉时不画也不占位。 */
-        fun setShowArrows(show: Boolean) {
-            if (show != showArrows) {
-                showArrows = show
-                requestLayout()
-                invalidate()
-            }
-        }
 
         fun setInfo(simCount: Int, main: Int, sub: Int?) {
             val dualNow = simCount >= 2 && sub != null
             val s = sub ?: 4
-            if (dualNow != dual || simCount != this.simCount || main != mainLevel || s != subLevel) {
+            if (dualNow != dual || main != mainLevel || s != subLevel) {
                 dual = dualNow
-                this.simCount = simCount
                 mainLevel = main
                 subLevel = s
                 requestLayout()
@@ -803,94 +784,24 @@ internal object DualSignalHook {
             }
         }
 
-        private fun d() = resources.displayMetrics.density
-        private fun barW() = d() * BAR_W_DP
-        private fun gap() = d() * BAR_GAP_DP
-        private fun maxH() = (if (dual) BAR_MAX_H_DP else SINGLE_BAR_MAX_H_DP) * d()
-        private fun rowGap() = d() * ROW_GAP_DP
-        private fun barsW() = barW() * 4f + gap() * 3f
-        private fun arrowsW() = if (showArrows) d() * ARROWS_GAP_DP + d() * ARROWS_BLOCK_DP else 0f
-        private fun viewW() = barsW() + arrowsW()
-        private fun viewH() = if (dual) maxH() + rowGap() + barW() else maxH()
-
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            setMeasuredDimension(viewW().roundToInt(), viewH().roundToInt())
+            val a = TrioConfig.appearance()
+            val density = resources.displayMetrics.density
+            val h = TrioRenderer.outSignalHeight(a, a.outSignalSize, density, dual)
+            val w = TrioRenderer.outSignalWidth(h, a, null, null, dual)
+            setMeasuredDimension(w, h)
         }
 
         override fun onDraw(canvas: Canvas) {
-            val bw = barW()
-            val gap = gap()
-            val maxH = maxH()
-            val rowGap = rowGap()
-            val radius = bw / 2f
-            for (i in 0 until 4) {
-                val h = BAR_H_RATIO[i] * maxH
-                val left = i * (bw + gap)
-                rect.set(left, maxH - h, left + bw, maxH)
-                paint.color = color
-                paint.alpha = if (i >= mainLevel) DIM_ALPHA else 255
-                canvas.drawRoundRect(rect, radius, radius, paint)
+            // onDraw 异常防护：渲染异常不能穿透 SystemUI。
+            try {
+                TrioRenderer.drawOutSignal(
+                    canvas, width, height, mainLevel, if (dual) subLevel else -1,
+                    color, TrioConfig.appearance(),
+                )
+            } catch (t: Throwable) {
+                TrioHooks.log(TrioHooks.LOG_ERROR, "DualSignalBarsView.onDraw crashed: ${t.message}")
             }
-            if (dual) {
-                val cy = maxH + rowGap + bw / 2f
-                for (i in 0 until 4) {
-                    val cx = i * (bw + gap) + bw / 2f
-                    paint.color = color
-                    paint.alpha = if (i < subLevel) 255 else DIM_ALPHA
-                    canvas.drawCircle(cx, cy, bw / 2f, paint)
-                }
-            }
-            if (showArrows) {
-                drawTrafficArrows(canvas, barsW() + d() * ARROWS_GAP_DP)
-            }
-        }
-
-        /**
-         * 流量箭头组件：左半移动数据、右半 Wi-Fi，与胶囊里的同一个件同一套状态
-         * （移动侧吃电话的 dataActivity，Wi-Fi 侧吃 TrafficStats 采样）。未连接
-         * 的一侧用更暗的灰占位而不是消失，两半的相对位置才稳定。
-         */
-        private fun drawTrafficArrows(canvas: Canvas, left: Float) {
-            val block = d() * ARROWS_BLOCK_DP
-            val cy = viewH() * 0.5f
-            drawArrowPair(
-                canvas, left + block * 0.25f, cy,
-                connected = TrioState.sMobileLevel >= 0,
-                up = TrioState.sDataActivity == 2 || TrioState.sDataActivity == 3,
-                down = TrioState.sDataActivity == 1 || TrioState.sDataActivity == 3,
-            )
-            drawArrowPair(
-                canvas, left + block * 0.75f, cy,
-                connected = TrioState.sWifiLevel >= 0,
-                up = TrioState.sWifiTrafficUp,
-                down = TrioState.sWifiTrafficDown,
-            )
-        }
-
-        private fun drawArrowPair(
-            canvas: Canvas, cx: Float, cy: Float,
-            connected: Boolean, up: Boolean, down: Boolean,
-        ) {
-            val aw = d() * ARROW_HALF_W_DP
-            val ah = d() * ARROW_HALF_H_DP
-            val dy = d() * ARROW_DY_DP
-            // 未连接比「连接但空闲」更暗：灰色也要能区分两半的连接状态。
-            val idleAlpha = if (connected) DIM_ALPHA else (DIM_ALPHA * 0.45f).toInt()
-            paint.color = color
-            paint.alpha = if (connected && up) 255 else idleAlpha
-            arrow.reset()
-            arrow.moveTo(cx, cy - dy - ah)
-            arrow.lineTo(cx - aw, cy - dy + ah)
-            arrow.lineTo(cx + aw, cy - dy + ah)
-            arrow.close()
-            canvas.drawPath(arrow, paint)
-            paint.alpha = if (connected && down) 255 else idleAlpha
-            arrow.reset()
-            arrow.moveTo(cx, cy + dy + ah)
-            arrow.lineTo(cx - aw, cy + dy - ah)
-            arrow.lineTo(cx + aw, cy + dy - ah)
-            arrow.close()
-            canvas.drawPath(arrow, paint)
         }
     }
 }

@@ -213,8 +213,8 @@ class TrioAppearance(c: TrioSettings) {
     /** The dual-row signal carries a network-type label; see [Prefs.KEY_DUAL_SIGNAL_LABEL]. */
     @JvmField val dualSignalLabel: Boolean = c.dualSignalLabel
 
-    /** The dual-row signal carries the traffic arrows; see [Prefs.KEY_DUAL_SIGNAL_ARROWS]. */
-    @JvmField val dualSignalArrows: Boolean = c.dualSignalArrows
+    /** 模块生效范围的排除位掩码；见 [Prefs.KEY_EFFECTIVE_SCOPE]。 */
+    @JvmField val effectiveScope: Int = c.effectiveScope
 
     /** The secondary SIM's status-bar signal icon is hidden; see [Prefs.KEY_HIDE_SIM2]. */
     @JvmField val hideSim2: Boolean = c.hideSim2
@@ -515,8 +515,16 @@ class TrioAppearance(c: TrioSettings) {
     fun boltScaleFactor(): Float =
         Prefs.clamp(boltScale, Prefs.MIN_BOLT_SCALE, Prefs.MAX_BOLT_SCALE) / 100f
 
-    /** Whether the bolt moves at all. */
-    fun boltAnimates(): Boolean = boltAnim != Prefs.BOLT_ANIM_OFF
+    /**
+     * Whether the bolt moves at all.
+     *
+     * The pulse style is the bolt breathing in step with the charge fill, so it is owned
+     * by [trioChargeBreath]: with that switch off the fill, the outline and the bolt all
+     * hold still, which is what the switch promises. Flow and spark keep their own motion.
+     */
+    fun boltAnimates(): Boolean =
+        boltAnim != Prefs.BOLT_ANIM_OFF &&
+            (boltAnim != Prefs.BOLT_ANIM_PULSE || trioChargeBreath)
 
     /**
      * The loop's speed multiplier, 1.0 at the authored pace.
@@ -535,9 +543,16 @@ class TrioAppearance(c: TrioSettings) {
      * that queued another piece ahead of it - or a preview arranged that way - showed a
      * completely still outline. A full battery still stops everything, because there is
      * nothing left to charge.
+     *
+     * The breathing style is the one exception: it *is* the bolt's own motion, and the
+     * bolt only lives in the five-second prompt window after plugging in. Once the bolt
+     * has hidden, its breathing stops with it - otherwise the glyph kept pulsing long
+     * after the thing that pulses had gone, which is exactly what "the bolt hides after
+     * five seconds" is supposed to mean.
      */
     fun animatesOutline(charging: Boolean, level: Int): Boolean =
-        charging && level < 100 && boltAnimates()
+        charging && level < 100 && boltAnimates() &&
+            (boltAnim != Prefs.BOLT_ANIM_PULSE || TrioState.boltPromptShown(charging))
 
     /** The ring's level-dot size multiplier, 1.0 for the bead the stroke implies. */
     fun dotScaleFactor(): Float =
@@ -753,6 +768,23 @@ class TrioAppearance(c: TrioSettings) {
         /** The level dots are drawn as two rows, one per SIM. */
         @JvmField val dual: Boolean
 
+        /** 两侧这一帧画什么：珠排、Wi-Fi 弧，或空着。 */
+        @JvmField val hasLeftDots: Boolean
+        @JvmField val hasRightDots: Boolean
+        @JvmField val hasLeftWifi: Boolean
+        @JvmField val hasRightWifi: Boolean
+
+        /**
+         * 环在上下缺口、左右两侧开出的角度半宽，单位为度；`0` 表示该处闭合。
+         *
+         * 上下的缺口沿用原来的 96° 宽度，两侧由 [TrioGeometry.flankHalfDeg] 按放的组件
+         * 反推：珠排按珠径与柱数，Wi-Fi 不开口，其余组件按参考单元格切。
+         */
+        @JvmField val topHalfDeg: Float
+        @JvmField val bottomHalfDeg: Float
+        @JvmField val leftFlankHalfDeg: Float
+        @JvmField val rightFlankHalfDeg: Float
+
         init {
             // The zone draws the FIRST candidate that has something to show this frame.
             for (z in 0 until Prefs.ZONE_COUNT) {
@@ -786,6 +818,23 @@ class TrioAppearance(c: TrioSettings) {
             gapUsed = parts[0] != Prefs.PART_NONE
             // The dual switch does not change how a zone is drawn: a zone draws one piece, so a second row has nowhere to go.
             dual = false
+            hasLeftDots = Prefs.isSignalRow(parts[Prefs.ZONE_LEFT])
+            hasRightDots = Prefs.isSignalRow(parts[Prefs.ZONE_RIGHT])
+            hasLeftWifi = parts[Prefs.ZONE_LEFT] == Prefs.PART_WIFI
+            hasRightWifi = parts[Prefs.ZONE_RIGHT] == Prefs.PART_WIFI
+            topHalfDeg =
+                if (parts[Prefs.ZONE_TOP] != Prefs.PART_NONE) TrioGeometry.GAP_WIDTH_DEG * 0.5f else 0f
+            bottomHalfDeg =
+                if (parts[Prefs.ZONE_BOTTOM] != Prefs.PART_NONE) TrioGeometry.GAP_WIDTH_DEG * 0.5f else 0f
+            leftFlankHalfDeg = TrioGeometry.flankHalfDeg(parts[Prefs.ZONE_LEFT], a)
+            rightFlankHalfDeg = TrioGeometry.flankHalfDeg(parts[Prefs.ZONE_RIGHT], a)
+        }
+
+        /** 这一侧开口的角度半宽；侧边之外返回 0。 */
+        fun flankHalfDeg(zone: Int): Float = when (zone) {
+            Prefs.ZONE_LEFT -> leftFlankHalfDeg
+            Prefs.ZONE_RIGHT -> rightFlankHalfDeg
+            else -> 0f
         }
 
         fun gapStart(): Float = when {
@@ -866,11 +915,14 @@ class TrioAppearance(c: TrioSettings) {
                     a, a.ringZones[band.ordinal], level, charging, wifiLevel, mobileType,
                 )
             }
+            // 胶囊的两侧是两个半圆端：只认珠排与 Wi-Fi 弧，其余组件留空而不是画成空位。
+            for (band in intArrayOf(TrioZones.Zone.LEFT.ordinal, TrioZones.Zone.RIGHT.ordinal)) {
+                val id = parts[band]
+                if (!isDotRow(id) && id != Prefs.PART_WIFI) parts[band] = Prefs.PART_NONE
+            }
             for (band in zones) dotBands[band.ordinal] = isDotRow(parts[band.ordinal])
 
-            val anyPlaced = anyPlaced(parts) ||
-                dotBands[TrioZones.Zone.TOP.ordinal] ||
-                dotBands[TrioZones.Zone.BOTTOM.ordinal]
+            val anyPlaced = anyPlaced(parts) || dotBands.any { it }
             if (!anyPlaced) {
                 // Nothing has ever been placed: behave exactly as before these cells existed.
                 val boltWanted = charging && a.drawsBolt() && TrioState.boltPromptShown(charging)
@@ -911,7 +963,8 @@ class TrioAppearance(c: TrioSettings) {
                 if (dotBands[band.ordinal]) second[band.ordinal] = Prefs.PART_NONE
                 if (dotBands[band.ordinal]) third[band.ordinal] = Prefs.PART_NONE
             }
-            dots = dotBands[TrioZones.Zone.TOP.ordinal] || dotBands[TrioZones.Zone.BOTTOM.ordinal]
+            // 任一段有珠排都要画：两侧圆端的珠行与上下开口的是同一次绘制。
+            dots = dotBands.any { it }
             dual = a.dualSimRows(false, sims)
             bolt = parts.contains(Prefs.PART_BOLT)
             wifi = parts.contains(Prefs.PART_WIFI)
@@ -983,6 +1036,8 @@ class TrioAppearance(c: TrioSettings) {
             // 流量箭头组件常驻可放：两半各自按「已连接」与否画成彩色或灰色，
             // 所以它永远有墨，不需要额外的开关。
             Prefs.PART_TRAFFIC -> true
+            // 蓝牙电量正方环组件：电量在 0..100 时才画，未知时整格空着。
+            Prefs.PART_BT_BATTERY -> TrioState.sBtBatteryLevel in 0..100
             else -> false
         }
 
@@ -1058,7 +1113,7 @@ class TrioAppearance(c: TrioSettings) {
         ): Int {
             if (order == null) return Prefs.PART_NONE
             for (id in order) {
-                if (!Prefs.zoneAccepts(band, id)) continue
+                if (!Prefs.zoneAccepts(band, id, a.style)) continue
                 if (hasInk(a, id, level, charging, wifiLevel, mobileType)) return id
             }
             return Prefs.PART_NONE

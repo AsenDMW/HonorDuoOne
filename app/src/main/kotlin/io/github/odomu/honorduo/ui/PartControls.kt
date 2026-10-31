@@ -81,6 +81,7 @@ internal enum class TrioSettingsPart(val part: TrioZones.Part?, val labelRes: In
     Type(TrioZones.Part.TYPE, R.string.show_mobile_type_title),
     Clock(TrioZones.Part.CLOCK, R.string.drawing_occupant_clock),
     Traffic(TrioZones.Part.TRAFFIC, R.string.show_traffic_title),
+    BtBattery(TrioZones.Part.BT_BATTERY, R.string.show_bt_battery_title),
     Shade(null, R.string.drawing_part_shade),
     ;
 
@@ -832,6 +833,16 @@ internal fun PartSettingsSheet(
                         } else {
                             ContentControlRow(control, settings, update, ringSettings)
                         }
+                    }
+                    // 「蓝牙电量」卡片：正方环的位置在排布页设，这里只有弧线/数字那一个
+                    // 选择。说明一句，免得点进来只剩下一行字像漏了什么。
+                    if (part == TrioSettingsPart.BtBattery) {
+                        Text(
+                            text = stringResource(R.string.bt_battery_place_hint),
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 4.dp),
+                        )
                     }
                 if (rows.isEmpty() && colors.isEmpty() && controls.isEmpty()) {
                     Text(

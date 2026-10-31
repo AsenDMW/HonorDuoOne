@@ -162,7 +162,12 @@ internal class TrioState(val host: View) {
         wifiLevel = sWifiLevel
         wifiLevel5 = sWifiLevel5
         wifiStandard = sWifiStandard
-        btBatteryLevel = if (TrioConfig.get().trioBtBattery > 0) sBtBatteryLevel else -1
+        // 弧线/数字（开关控制）和排布页的正方环（放下即用）都要这个电量，两者任一
+        // 生效就得交给渲染层，否则只放正方环时格子永远是空的。
+        val btUsed = TrioConfig.get().let { s ->
+            s.trioBtBattery > 0 || s.ringZones.any { it.contains(Prefs.PART_BT_BATTERY) }
+        }
+        btBatteryLevel = if (btUsed) sBtBatteryLevel else -1
         wifiTrafficUp = sWifiTrafficUp
         wifiTrafficDown = sWifiTrafficDown
         mobileLevel = sMobileLevel
@@ -205,23 +210,25 @@ internal class TrioState(val host: View) {
      * border happened to be repainted.
      */
     private fun resolveInk(): Int {
-        val tint = Refl.getInt(hostTint, host, 0)
-        if (tint != 0) {
-            noteInk(tint, "mTintColor")
-            return tint
-        }
-        val border = Refl.get(hostBorder, host)
-        if (border != null) {
-            if (borderInk == null) borderInk = Refl.field(border.javaClass, "mDefaultColor")
-            val colour = Refl.getInt(borderInk, border, 0)
-            if (colour != 0) {
-                noteInk(colour, "border")
-                return colour
+        var tint = Refl.getInt(hostTint, host, 0)
+        if (tint == 0) {
+            val border = Refl.get(hostBorder, host)
+            if (border != null) {
+                if (borderInk == null) borderInk = Refl.field(border.javaClass, "mDefaultColor")
+                tint = Refl.getInt(borderInk, border, 0)
             }
         }
-        val fallback = if (nightMode()) WHITE else DEFAULT_FOREGROUND
-        noteInk(fallback, "fallback")
-        return fallback
+        if (tint == 0) {
+            tint = if (nightMode()) WHITE else DEFAULT_FOREGROUND
+        }
+        // MagicOS 10 反色兼容：部分 ROM 对状态栏系统图标做反色处理，自绘字形需跟随反色，
+        // 否则颜色与原生图标相反。仅反 RGB，保留 alpha。
+        if (TrioConfig.get().magicos10Invert) {
+            val a = tint and 0xFF000000.toInt()
+            tint = a or (tint.inv() and 0x00FFFFFF)
+        }
+        noteInk(tint, if (TrioConfig.get().magicos10Invert) "inverted" else "resolved")
+        return tint
     }
 
     /** Records the resolved ink once per change, so a device log can be read off. */

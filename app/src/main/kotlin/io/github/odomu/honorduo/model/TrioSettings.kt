@@ -124,6 +124,9 @@ class TrioSettings {
     /** Show native icons while panel is expanded; see [Prefs.KEY_PANEL_NATIVE_ICONS]. */
     @JvmField
     var panelNativeIcons = Prefs.DEF_PANEL_NATIVE_ICONS
+    /** MagicOS 10 invert-color compensation; see [Prefs.KEY_MAGICOS10_INVERT]. */
+    @JvmField
+    var magicos10Invert = Prefs.DEF_MAGICOS10_INVERT
 
     /** Hides the bar's own clock outright; see [Prefs.KEY_HIDE_STATUS_CLOCK]. */
     @JvmField
@@ -149,9 +152,9 @@ class TrioSettings {
     @JvmField
     var dualSignalLabel = Prefs.DEF_DUAL_SIGNAL_LABEL
 
-    /** Traffic arrows beside the dual-row signal; see [Prefs.KEY_DUAL_SIGNAL_ARROWS]. */
+    /** 模块生效范围的排除位掩码；见 [Prefs.KEY_EFFECTIVE_SCOPE]。 */
     @JvmField
-    var dualSignalArrows = Prefs.DEF_DUAL_SIGNAL_ARROWS
+    var effectiveScope = Prefs.DEF_EFFECTIVE_SCOPE
 
     /** Hides the secondary SIM's status-bar signal icon; see [Prefs.KEY_HIDE_SIM2]. */
     @JvmField
@@ -487,13 +490,14 @@ class TrioSettings {
             trioKeepIcons = Prefs.DEF_TRIO_KEEP_ICONS
             capsuleNoScale = Prefs.DEF_CAPSULE_NO_SCALE
             panelNativeIcons = Prefs.DEF_PANEL_NATIVE_ICONS
+            magicos10Invert = Prefs.DEF_MAGICOS10_INVERT
             hideStatusClock = Prefs.DEF_HIDE_STATUS_CLOCK
             hideAlarmIcon = Prefs.DEF_HIDE_ALARM_ICON
             hideBluetoothIcon = Prefs.DEF_HIDE_BLUETOOTH_ICON
             ccVolumeLongpress = Prefs.DEF_CC_VOLUME_LONGPRESS
             dualSignal = Prefs.DEF_DUAL_SIGNAL
             dualSignalLabel = Prefs.DEF_DUAL_SIGNAL_LABEL
-            dualSignalArrows = Prefs.DEF_DUAL_SIGNAL_ARROWS
+            effectiveScope = Prefs.DEF_EFFECTIVE_SCOPE
             hideSim2 = Prefs.DEF_HIDE_SIM2
             hideNetType = Prefs.DEF_HIDE_NET_TYPE
             notifHideCharging = Prefs.DEF_NOTIF_HIDE_CHARGING
@@ -704,13 +708,16 @@ class TrioSettings {
             s.trioKeepIcons = p.getBoolean(Prefs.KEY_TRIO_KEEP_ICONS, Prefs.DEF_TRIO_KEEP_ICONS)
             s.capsuleNoScale = p.getBoolean(Prefs.KEY_CAPSULE_NO_SCALE, Prefs.DEF_CAPSULE_NO_SCALE)
             s.panelNativeIcons = p.getBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, Prefs.DEF_PANEL_NATIVE_ICONS)
+            s.magicos10Invert = p.getBoolean(Prefs.KEY_MAGICOS10_INVERT, Prefs.DEF_MAGICOS10_INVERT)
             s.hideStatusClock = p.getBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, Prefs.DEF_HIDE_STATUS_CLOCK)
             s.hideAlarmIcon = p.getBoolean(Prefs.KEY_HIDE_ALARM_ICON, Prefs.DEF_HIDE_ALARM_ICON)
             s.hideBluetoothIcon = p.getBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, Prefs.DEF_HIDE_BLUETOOTH_ICON)
             s.ccVolumeLongpress = p.getBoolean(Prefs.KEY_CC_VOLUME_LONGPRESS, Prefs.DEF_CC_VOLUME_LONGPRESS)
             s.dualSignal = p.getBoolean(Prefs.KEY_DUAL_SIGNAL, Prefs.DEF_DUAL_SIGNAL)
             s.dualSignalLabel = p.getBoolean(Prefs.KEY_DUAL_SIGNAL_LABEL, Prefs.DEF_DUAL_SIGNAL_LABEL)
-            s.dualSignalArrows = p.getBoolean(Prefs.KEY_DUAL_SIGNAL_ARROWS, Prefs.DEF_DUAL_SIGNAL_ARROWS)
+            s.effectiveScope = Prefs.normalizeScope(
+                p.getInt(Prefs.KEY_EFFECTIVE_SCOPE, Prefs.DEF_EFFECTIVE_SCOPE),
+            )
             s.hideSim2 = p.getBoolean(Prefs.KEY_HIDE_SIM2, Prefs.DEF_HIDE_SIM2)
             s.hideNetType = p.getBoolean(Prefs.KEY_HIDE_NET_TYPE, Prefs.DEF_HIDE_NET_TYPE)
             s.notifHideCharging =
@@ -1043,6 +1050,7 @@ class TrioSettings {
             s.trioKeepIcons = bundle.getBoolean(Prefs.KEY_TRIO_KEEP_ICONS, Prefs.DEF_TRIO_KEEP_ICONS)
             s.capsuleNoScale = bundle.getBoolean(Prefs.KEY_CAPSULE_NO_SCALE, Prefs.DEF_CAPSULE_NO_SCALE)
             s.panelNativeIcons = bundle.getBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, Prefs.DEF_PANEL_NATIVE_ICONS)
+            s.magicos10Invert = bundle.getBoolean(Prefs.KEY_MAGICOS10_INVERT, Prefs.DEF_MAGICOS10_INVERT)
             s.hideStatusClock = bundle.getBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, Prefs.DEF_HIDE_STATUS_CLOCK)
             s.hideAlarmIcon = bundle.getBoolean(Prefs.KEY_HIDE_ALARM_ICON, Prefs.DEF_HIDE_ALARM_ICON)
             s.hideBluetoothIcon = bundle.getBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, Prefs.DEF_HIDE_BLUETOOTH_ICON)
@@ -1050,7 +1058,9 @@ class TrioSettings {
                 bundle.getBoolean(Prefs.KEY_CC_VOLUME_LONGPRESS, Prefs.DEF_CC_VOLUME_LONGPRESS)
             s.dualSignal = bundle.getBoolean(Prefs.KEY_DUAL_SIGNAL, Prefs.DEF_DUAL_SIGNAL)
             s.dualSignalLabel = bundle.getBoolean(Prefs.KEY_DUAL_SIGNAL_LABEL, Prefs.DEF_DUAL_SIGNAL_LABEL)
-            s.dualSignalArrows = bundle.getBoolean(Prefs.KEY_DUAL_SIGNAL_ARROWS, Prefs.DEF_DUAL_SIGNAL_ARROWS)
+            s.effectiveScope = Prefs.normalizeScope(
+                bundle.getInt(Prefs.KEY_EFFECTIVE_SCOPE, Prefs.DEF_EFFECTIVE_SCOPE),
+            )
             s.hideSim2 = bundle.getBoolean(Prefs.KEY_HIDE_SIM2, Prefs.DEF_HIDE_SIM2)
             s.hideNetType = bundle.getBoolean(Prefs.KEY_HIDE_NET_TYPE, Prefs.DEF_HIDE_NET_TYPE)
             s.notifHideCharging =
@@ -1760,13 +1770,14 @@ class TrioSettings {
             Prefs.KEY_TRIO_KEEP_ICONS -> trioKeepIcons = src.trioKeepIcons
             Prefs.KEY_CAPSULE_NO_SCALE -> capsuleNoScale = src.capsuleNoScale
             Prefs.KEY_PANEL_NATIVE_ICONS -> panelNativeIcons = src.panelNativeIcons
+            Prefs.KEY_MAGICOS10_INVERT -> magicos10Invert = src.magicos10Invert
             Prefs.KEY_HIDE_STATUS_CLOCK -> hideStatusClock = src.hideStatusClock
             Prefs.KEY_HIDE_ALARM_ICON -> hideAlarmIcon = src.hideAlarmIcon
             Prefs.KEY_HIDE_BLUETOOTH_ICON -> hideBluetoothIcon = src.hideBluetoothIcon
             Prefs.KEY_CC_VOLUME_LONGPRESS -> ccVolumeLongpress = src.ccVolumeLongpress
             Prefs.KEY_DUAL_SIGNAL -> dualSignal = src.dualSignal
             Prefs.KEY_DUAL_SIGNAL_LABEL -> dualSignalLabel = src.dualSignalLabel
-            Prefs.KEY_DUAL_SIGNAL_ARROWS -> dualSignalArrows = src.dualSignalArrows
+            Prefs.KEY_EFFECTIVE_SCOPE -> effectiveScope = Prefs.normalizeScope(src.effectiveScope)
             Prefs.KEY_HIDE_SIM2 -> hideSim2 = src.hideSim2
             Prefs.KEY_HIDE_NET_TYPE -> hideNetType = src.hideNetType
             Prefs.KEY_NOTIF_HIDE_CHARGING -> notifHideCharging = src.notifHideCharging
@@ -1909,13 +1920,14 @@ class TrioSettings {
         putBoolean(Prefs.KEY_TRIO_KEEP_ICONS, trioKeepIcons)
         putBoolean(Prefs.KEY_CAPSULE_NO_SCALE, capsuleNoScale)
         putBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, panelNativeIcons)
+        putBoolean(Prefs.KEY_MAGICOS10_INVERT, magicos10Invert)
         putBoolean(Prefs.KEY_HIDE_STATUS_CLOCK, hideStatusClock)
         putBoolean(Prefs.KEY_HIDE_ALARM_ICON, hideAlarmIcon)
         putBoolean(Prefs.KEY_HIDE_BLUETOOTH_ICON, hideBluetoothIcon)
         putBoolean(Prefs.KEY_CC_VOLUME_LONGPRESS, ccVolumeLongpress)
         putBoolean(Prefs.KEY_DUAL_SIGNAL, dualSignal)
         putBoolean(Prefs.KEY_DUAL_SIGNAL_LABEL, dualSignalLabel)
-        putBoolean(Prefs.KEY_DUAL_SIGNAL_ARROWS, dualSignalArrows)
+        putInt(Prefs.KEY_EFFECTIVE_SCOPE, Prefs.normalizeScope(effectiveScope))
         putBoolean(Prefs.KEY_HIDE_SIM2, hideSim2)
         putBoolean(Prefs.KEY_HIDE_NET_TYPE, hideNetType)
         putBoolean(Prefs.KEY_NOTIF_HIDE_CHARGING, notifHideCharging)
@@ -2048,13 +2060,14 @@ class TrioSettings {
             trioKeepIcons == other.trioKeepIcons &&
             capsuleNoScale == other.capsuleNoScale &&
             panelNativeIcons == other.panelNativeIcons &&
+            magicos10Invert == other.magicos10Invert &&
             hideStatusClock == other.hideStatusClock &&
             hideAlarmIcon == other.hideAlarmIcon &&
             hideBluetoothIcon == other.hideBluetoothIcon &&
             ccVolumeLongpress == other.ccVolumeLongpress &&
             dualSignal == other.dualSignal &&
             dualSignalLabel == other.dualSignalLabel &&
-            dualSignalArrows == other.dualSignalArrows &&
+            effectiveScope == other.effectiveScope &&
             hideSim2 == other.hideSim2 &&
             hideNetType == other.hideNetType &&
             notifHideCharging == other.notifHideCharging &&
@@ -2072,6 +2085,7 @@ class TrioSettings {
         h = h * 31 + perfScale
         h = h * 31 + perfWeight
         h = h * 31 + perfLineGap
+        h = h * 31 + effectiveScope
         h = h * 31 + glyphScale
         return if (h != 0) h else 1
     }

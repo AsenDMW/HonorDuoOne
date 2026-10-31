@@ -189,7 +189,11 @@ internal object PanelExpansionHook {
         ) { chain ->
             val result = chain.proceed()
             runCatching {
-                if ((chain.getArg(0) as? Byte)?.toInt() == 0) {
+                // 面板类型同时是「模块生效范围」的输入：0 收起 / 1 通知面板 /
+                // 2 控制中心 / 3、4 同两页压在锁屏上（见 ScopeTracker）。
+                val type = (chain.getArg(0) as? Number)?.toInt() ?: 0
+                ScopeTracker.onPanelType(type)
+                if (type == 0) {
                     chain.thisObject?.let { scheduleCollapseSettle(it) }
                 }
             }

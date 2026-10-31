@@ -17,6 +17,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import io.github.libxposed.api.XposedModule
+import io.github.odomu.honorduo.model.Prefs
 import io.github.odomu.honorduo.model.TrioConfig
 import io.github.odomu.honorduo.model.TrioState
 import java.lang.reflect.Field
@@ -51,6 +52,12 @@ internal object BtBatteryHook {
     /** Seeding re-entry guard: the seeded updateBluetooth re-enters this hook. */
     @Volatile private var seeding = false
 
+    /** 只读状态播种的防重入位（见 [seedState]）。 */
+    @Volatile private var stateSeeding = false
+
+    /** 只读播种的兜底解锁时间：代理回调不来时不让守卫永久卡住。 */
+    private const val STATE_SEED_TIMEOUT_MS = 5_000L
+
     fun install(module: XposedModule, cl: ClassLoader): Int {
         val policy = Refl.cls(
             "com.android.systemui.statusbar.phone.HwPhoneStatusBarPolicy", cl,
@@ -61,7 +68,12 @@ internal object BtBatteryHook {
         ) { chain ->
             val result = chain.proceed()
             runCatching {
-                if (TrioConfig.appearance().trioBtBattery <= 0) return@runCatching
+                val a = TrioConfig.appearance()
+                if (!a.enabled) return@runCatching
+                // 电量有两个使用方：卡 1 信号点上的弧线/数字（由开关决定），以及排布页
+                // 里的蓝牙电量正方环（由「有没有放这一件」决定）。所以门控是「开关开着
+                // 或放了这一件」，只看开关会让只放正方环的用户永远取不到电量，格子空着。
+                if (a.trioBtBattery <= 0 && !a.placed(Prefs.PART_BT_BATTERY)) return@runCatching
                 val self = chain.thisObject ?: return@runCatching
                 val policyField = policyBluetoothField
                     ?: Refl.field(self.javaClass, "mBluetooth")?.also { policyBluetoothField = it }
@@ -81,10 +93,15 @@ internal object BtBatteryHook {
                     }
                 }
                 if (v !in 0..100) {
-                    // 粘滞位清理必须在播种之前：断开/改连无电量设备时原生会残留
-                    // 「B+电量」图标；清掉后重调 updateBluetooth，原生按连接态重绘。
-                    clearSticky(controller, self)
-                    seed(controller, levelField, self)
+                    if (a.trioBtBattery > 0) {
+                        // 粘滞位清理必须在播种之前：断开/改连无电量设备时原生会残留
+                        // 「B+电量」图标；清掉后重调 updateBluetooth，原生按连接态重绘。
+                        clearSticky(controller, self)
+                        seed(controller, levelField, self)
+                    } else {
+                        // 只放正方环：不碰原生缓存与图标，只补模块自己的电量状态。
+                        seedState(self)
+                    }
                 }
             }
             result
@@ -179,5 +196,55 @@ internal object BtBatteryHook {
                 }
             }, BluetoothProfile.HEADSET)
         }.onFailure { seeding = false }
+    }
+
+    /**
+     * 只补模块状态的兜底播种（开关关闭、只放了正方环时用）。
+     *
+     * 与 [seed] 走同一个 HEADSET 代理读同一个 `getBatteryLevel`，但**不写原生缓存、
+     * 不调 `updateBluetoothEarBattery`**，所以原生蓝牙图标保持原样。重启 SystemUI 后
+     * 电量广播到来之前，正方环也能立即出数；查不到设备（断开/无电量）时置 -1 清掉旧值。
+     */
+    private fun seedState(policy: Any) {
+        if (stateSeeding) return
+        val adapter = runCatching { BluetoothAdapter.getDefaultAdapter() }.getOrNull()
+        if (adapter == null || !runCatching { adapter.isEnabled }.getOrDefault(false)) {
+            mainHandler.post {
+                TrioState.sBtBatteryLevel = -1
+                TrioHooks.invalidateHosts()
+            }
+            return
+        }
+        val contextField = Refl.field(policy.javaClass, "mContext") ?: return
+        val context = Refl.get(contextField, policy) as? Context ?: return
+        stateSeeding = true
+        // 代理连接回调可能永远不来（蓝牙恰好在关、或 getProfileProxy 被拒），超时后
+        // 解锁防重入位，让下一次 updateBluetooth 还能再试一次，不必等 SystemUI 重启。
+        mainHandler.postDelayed({ stateSeeding = false }, STATE_SEED_TIMEOUT_MS)
+        runCatching {
+            adapter.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                    var level = -1
+                    if (profile == BluetoothProfile.HEADSET) {
+                        val device = runCatching { proxy.connectedDevices?.firstOrNull() }.getOrNull()
+                        level = device?.let {
+                            runCatching {
+                                it.javaClass.getMethod("getBatteryLevel").invoke(it) as Int
+                            }.getOrDefault(-1)
+                        } ?: -1
+                    }
+                    runCatching { adapter.closeProfileProxy(profile, proxy) }
+                    mainHandler.post {
+                        TrioState.sBtBatteryLevel = level
+                        TrioHooks.invalidateHosts()
+                        stateSeeding = false
+                    }
+                }
+
+                override fun onServiceDisconnected(profile: Int) {
+                    stateSeeding = false
+                }
+            }, BluetoothProfile.HEADSET)
+        }.onFailure { stateSeeding = false }
     }
 }

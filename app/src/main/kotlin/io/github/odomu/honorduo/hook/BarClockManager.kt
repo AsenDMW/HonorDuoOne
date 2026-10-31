@@ -148,8 +148,8 @@ internal object BarClockManager {
                 }
             }
         }
-        if (!a.enabled || native == null || a.barClockHidden || (a.glyph && a.hidesStatusClock()) ||
-            !a.drawsBarClock()
+        if (!a.enabled || StatusBarRowManager.suppressed || native == null || a.barClockHidden ||
+            (a.glyph && a.hidesStatusClock()) || !a.drawsBarClock()
         ) {
             removeBarClock()
             // Releasing would undo the user's own "hide the bar clock" switch, which is
@@ -316,7 +316,9 @@ internal object BarClockManager {
         }
         val a = TrioConfig.appearance()
         val native = sBarClock?.get()
-        if (!a.enabled || native == null || (a.glyph && a.hidesStatusClock()) || !a.drawsBarClock()) {
+        if (!a.enabled || StatusBarRowManager.suppressed || native == null ||
+            (a.glyph && a.hidesStatusClock()) || !a.drawsBarClock()
+        ) {
             removeBarClock()
             return
         }

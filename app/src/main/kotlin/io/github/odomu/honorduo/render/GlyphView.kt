@@ -16,6 +16,7 @@ import android.graphics.Canvas
 import android.graphics.PorterDuff
 import android.view.View
 import io.github.odomu.honorduo.hook.ScreenStateTracker
+import io.github.odomu.honorduo.hook.TrioHooks
 import io.github.odomu.honorduo.model.TrioConfig
 import io.github.odomu.honorduo.model.TrioState
 import kotlin.math.roundToInt
@@ -93,6 +94,17 @@ internal class GlyphView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
+        // onDraw 异常防护：任何渲染异常都不能穿透 SystemUI，否则会触发 LSPosed 安全模式。
+        // 整帧用 try-catch(Throwable) 包住，出错时仅清屏并记录日志，不抛出。
+        try {
+            onDrawInner(canvas)
+        } catch (t: Throwable) {
+            canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+            TrioHooks.log(TrioHooks.LOG_ERROR, "GlyphView.onDraw crashed: ${t.message}")
+        }
+    }
+
+    private fun onDrawInner(canvas: Canvas) {
         val state = state ?: return
         if (!TrioConfig.get().enabled || width <= 0 || height <= 0) return
         // Read the live state on every frame: battery, signal and ink all change

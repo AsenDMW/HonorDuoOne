@@ -39,13 +39,28 @@ import kotlin.math.roundToInt
  */
 object TrioZones {
 
-    /** The three bands, in the order [Prefs.ZONE_*] stores them. */
-    enum class Zone { TOP, CENTRE, BOTTOM }
+    /**
+     * The five bands, in the order [Prefs.ZONE_*] stores them.
+     *
+     * The two flanks were appended rather than inserted: the stored layout reads section by
+     * section, so an older three-section string still means top, middle, bottom.
+     */
+    enum class Zone { TOP, CENTRE, BOTTOM, LEFT, RIGHT }
+
+    /**
+     * 命中测试的顺序：先上下、再左右、最后中部。
+     *
+     * 中部的命中框横跨整个字形宽度（圆环的墨迹在中线处就顶到边缘），如果先测中部，
+     * 两侧的点击永远会被中部抢走。左右两块只在中部高度上，所以放在中部之前即可。
+     */
+    private val HIT_ORDER = arrayOf(
+        Zone.TOP, Zone.BOTTOM, Zone.LEFT, Zone.RIGHT, Zone.CENTRE,
+    )
 
     /** The pieces the editor can point at. */
     enum class Part {
         BOLT, WIFI, MOBILE, VALUE, TYPE, SIM_1, SIM_2, CLOCK, POWER, TEMP, RUNNING, FPS,
-        TRAFFIC,
+        TRAFFIC, BT_BATTERY,
     }
 
     /**
@@ -113,6 +128,8 @@ object TrioZones {
                         RECT_SEAM_LEFT, RECT_CENTRE_BOTTOM, RECT_SEAM_RIGHT, TrioGeometry.BOX,
                     ),
                 )
+            // 圆角矩形的圆环没有两侧位置：它的左右是两列点阵，不是可以再放组件的开口。
+            Zone.LEFT, Zone.RIGHT -> emptyArray()
             }
         }
         return when (zone) {
@@ -127,7 +144,24 @@ object TrioZones {
             Zone.BOTTOM -> arrayOf(
                 floatArrayOf(0f, RING_CENTRE_BOTTOM, TrioGeometry.BOX, TrioGeometry.BOX),
             )
+            // 两侧开口以 9 点/3 点的环边为中心，纵向取中部带的高度。
+            Zone.LEFT -> arrayOf(flankBox(-1f))
+            Zone.RIGHT -> arrayOf(flankBox(1f))
         }
+    }
+
+    /**
+     * 圆环一侧的可点区域，`side` 为 -1 表示左侧、+1 表示右侧。
+     *
+     * 以环边上 9 点/3 点那一点为中心，横向各留 24 单位（足以覆盖珠排与单元格），
+     * 纵向取中部带的高度。中部命中框横跨全宽，所以 [HIT_ORDER] 把两侧排在中部之前。
+     */
+    private fun flankBox(side: Float): FloatArray {
+        val cx = TrioGeometry.B_CX + side * TrioGeometry.B_R
+        val half = TrioGeometry.DOT_BOX_CENTRE * 0.5f
+        return floatArrayOf(
+            cx - 24f, TrioGeometry.B_CY - half, cx + 24f, TrioGeometry.B_CY + half,
+        )
     }
 
     /**
@@ -162,6 +196,13 @@ object TrioZones {
             Zone.BOTTOM -> arrayOf(
                 floatArrayOf(left, bottom, right, TrioGeometry.CAP_INK_BOTTOM + fringe),
             )
+            // 胶囊的两侧是两个半圆端：命中框只盖住圆头本身。
+            Zone.LEFT -> arrayOf(
+                floatArrayOf(left, top, left + 2f * TrioGeometry.CAP_RADIUS, bottom),
+            )
+            Zone.RIGHT -> arrayOf(
+                floatArrayOf(right - 2f * TrioGeometry.CAP_RADIUS, top, right, bottom),
+            )
         }
     }
 
@@ -171,7 +212,7 @@ object TrioZones {
         if (a == null || transform == null || transform.size < 3 || transform[0] <= 0f) return null
         val x = (viewX - transform[1]) / transform[0]
         val y = (viewY - transform[2]) / transform[0]
-        for (zone in Zone.entries) {
+        for (zone in HIT_ORDER) {
             for (box in boxes(zone, a)) if (inside(box, x, y)) return zone
         }
         return null
@@ -193,7 +234,7 @@ object TrioZones {
         if (scale <= 0f) return null
         val designX = (viewX - transform[1]) / scale
         val designY = (viewY - transform[2]) / scale
-        return Zone.entries.firstOrNull { inZone(it, rect, designX, designY) }
+        return HIT_ORDER.firstOrNull { inZone(it, rect, designX, designY) }
     }
 
     /** Maps a design-space point back into view space, or reports that it cannot. */
@@ -267,6 +308,8 @@ object TrioZones {
             // The bar is the battery and is not optional; what the user can switch down
             // here is the dot columns framing it.
             Zone.BOTTOM -> if (rc.dots) Part.MOBILE else null
+            // 圆角矩形没有两侧位置。
+            Zone.LEFT, Zone.RIGHT -> null
         }
     }
 
@@ -359,13 +402,14 @@ object TrioZones {
     /**
      * Whether `part` may be placed in `zone`.
      *
-     * Only the ring refuses a placement; the capsule and the rectangle have no middle
-     * band to get wrong.
+     * The rule depends on the arrangement: the ring's middle refuses a signal row, and the
+     * capsule's two round ends only know how to lay beads and draw the Wi-Fi arcs, so the
+     * other pieces are refused there instead of silently drawing nothing.
      */
     @JvmStatic
     fun accepts(zone: Zone, part: Part?, current: TrioSettings?): Boolean {
         if (current == null || part == null) return true
-        return current.trioStyle != Prefs.STYLE_RING || ringAccepts(zone, part)
+        return Prefs.zoneAccepts(zone.ordinal, encodePart(part), current.trioStyle)
     }
 
     /** The stored id for `part`. */
@@ -384,6 +428,7 @@ object TrioZones {
         Part.RUNNING -> Prefs.PART_RUNNING
         Part.FPS -> Prefs.PART_FPS
         Part.TRAFFIC -> Prefs.PART_TRAFFIC
+        Part.BT_BATTERY -> Prefs.PART_BT_BATTERY
         null -> Prefs.PART_NONE
     }
 
@@ -401,7 +446,9 @@ object TrioZones {
         Prefs.PART_POWER -> Part.POWER
         Prefs.PART_TEMP -> Part.TEMP
         Prefs.PART_RUNNING -> Part.RUNNING
+        Prefs.PART_FPS -> Part.FPS
         Prefs.PART_TRAFFIC -> Part.TRAFFIC
+        Prefs.PART_BT_BATTERY -> Part.BT_BATTERY
         else -> null
     }
 
@@ -546,7 +593,9 @@ object TrioZones {
     @JvmStatic
     fun placementChoices(zone: Zone, current: TrioSettings?, sims: Int): List<Part> =
         if (hasSlots(current)) {
-            ringChoices(zone)
+            // The ring and the capsule share the layout lists but not the acceptance rule,
+            // so the list the page offers has to be filtered by the arrangement in force.
+            ringChoices(zone).filter { accepts(zone, it, current) }
         } else {
             choices(zone, current!!.trioStyle == Prefs.STYLE_RECT, current, sims)
         }

@@ -28,10 +28,11 @@ android {
         minSdk = 29
         //noinspection TargetSdkVersionUpdate
         targetSdk = 37
-        // 首次公开发布：版本名从 1.0.0 起，versionCode 继续接在本机已装的 140 之上，
-        // 否则老用户覆盖安装会被系统当成降级拒掉。
-        versionCode = tagVersionCode ?: 141
-        versionName = tagVersionName ?: "1.0.0"
+        // 1.0.1（142）：公开发布第二版。合并 1.0.0 之后全部内测迭代（双排信号 Duo 画法、
+        // 下拉卡顿修复、模块生效范围、蓝牙电量门控、左右两侧组件等），
+        // 详见 docs/release-notes/release-notes-1.0.1.md。
+        versionCode = tagVersionCode ?: 142
+        versionName = tagVersionName ?: "1.0.1"
 
         buildConfigField("String", "REPO_SLUG", "\"$repoSlug\"")
     }

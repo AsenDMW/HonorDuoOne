@@ -290,6 +290,8 @@ private fun DrawingEditorCard(
             ContentControlRow(ContentControl.Enabled, settings, update)
             ContentControlRow(ContentControl.MergeIcons, settings, update)
             ContentControlRow(ContentControl.AntiBurnIn, settings, update)
+            // 模块生效范围：与上游一致，放在功能开关最后一行的位置。
+            ContentControlRow(ContentControl.EffectiveScope, settings, update)
         }
 
         DrawingSection(R.string.section_merge_style) {
@@ -1532,6 +1534,7 @@ private fun occupantLabelRes(part: TrioZones.Part?): Int = when (part) {
     TrioZones.Part.RUNNING -> R.string.drawing_occupant_running
     TrioZones.Part.FPS -> R.string.drawing_occupant_fps
     TrioZones.Part.TRAFFIC -> R.string.drawing_occupant_traffic
+    TrioZones.Part.BT_BATTERY -> R.string.show_bt_battery_title
     null -> R.string.drawing_occupant_none
 }
 
@@ -1551,10 +1554,30 @@ private fun zoneLabelRes(zone: TrioZones.Zone): Int = when (zone) {
     TrioZones.Zone.TOP -> R.string.drawing_hint_top
     TrioZones.Zone.CENTRE -> R.string.drawing_hint_centre
     TrioZones.Zone.BOTTOM -> R.string.drawing_hint_bottom
+    TrioZones.Zone.LEFT -> R.string.drawing_hint_left
+    TrioZones.Zone.RIGHT -> R.string.drawing_hint_right
 }
 
-/** The zones this arrangement shows, in tab order. All three styles have the same three. */
-private fun zonesFor(a: TrioAppearance): List<TrioZones.Zone> = TrioZones.Zone.entries.toList()
+/**
+ * 该排布展示的位置，按标签顺序。
+ *
+ * 环形与胶囊都有左右两侧；矩形没有侧边，只保留上中下三段。
+ */
+private fun zonesFor(a: TrioAppearance): List<TrioZones.Zone> {
+    // 标签按物理位置排：左侧在最左、右侧在最右，中间夹上/中/下。
+    val order = listOf(
+        TrioZones.Zone.LEFT,
+        TrioZones.Zone.TOP,
+        TrioZones.Zone.CENTRE,
+        TrioZones.Zone.BOTTOM,
+        TrioZones.Zone.RIGHT,
+    )
+    return if (a.rect) {
+        order.filter { it != TrioZones.Zone.LEFT && it != TrioZones.Zone.RIGHT }
+    } else {
+        order
+    }
+}
 
 /**
  * Says that the signal rows are drawn outside the ring, whatever this list holds.
@@ -1601,6 +1624,7 @@ private fun partSummaryRes(part: TrioZones.Part): Int = when (part) {
     TrioZones.Part.RUNNING -> R.string.perf_running_summary
     TrioZones.Part.FPS -> R.string.perf_fps_summary
     TrioZones.Part.TRAFFIC -> R.string.show_traffic_summary
+    TrioZones.Part.BT_BATTERY -> R.string.show_bt_battery_summary
 }
 
 /**

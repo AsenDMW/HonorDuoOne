@@ -222,6 +222,46 @@ object TrioGeometry {
     const val ARC_ROW_CLEARANCE = 1f
 
     /**
+     * 环两侧珠排的珠间距，设计单位。
+     *
+     * 侧边一排珠子是「从圆弧上切下来的一段」，按珠径与柱数反推跨度，所以珠与珠之间
+     * 只留一点点空隙；排得比环内缺口更紧，圆弧才能保留大部分长度。
+     */
+    const val FLANK_BEAD_GAP = 2f
+
+    /**
+     * 侧边珠排与环弧圆头之间留的空白，设计单位。
+     *
+     * 圆弧的圆头是半径 `stroke / 2` 的半圆，切得太窄时外侧两颗珠子会直接压在圆头上，
+     * 读起来像弧的钝端而不是珠子。
+     */
+    const val FLANK_ROW_CLEARANCE = 3f
+
+    /** 侧边组件与环弧圆头之间的空白，设计单位；按参考宽度切出的侧边单元格用。 */
+    const val NOTCH_PIECE_CLEARANCE = 3f
+
+    /** 环两侧 Wi-Fi 内弧与环外沿之间的间隔。 */
+    const val FLANK_WIFI_GAP = 4f
+
+    /** 环两侧两条 Wi-Fi 弧之间的间隔。 */
+    const val FLANK_WIFI_ARC_GAP = 4f
+
+    /** 两侧 Wi-Fi 弧的线宽与环实际线宽的比例。 */
+    const val FLANK_WIFI_STROKE_RATIO = 0.85f
+
+    /** 两侧 Wi-Fi 内弧、外弧各画多宽（角度）。 */
+    const val FLANK_WIFI_SWEEP_INNER = 46f
+    const val FLANK_WIFI_SWEEP_OUTER = 70f
+
+    /**
+     * 环的实际描边相对「环线宽」设置的比例。
+     *
+     * 设置里的线宽是环的视觉重量，弧按这个比例画细一点，珠子与侧边弧的粗细才随滑块
+     * 一起变化而不会先撑满。
+     */
+    const val RING_STROKE_RATIO = 0.68f
+
+    /**
      * Clearance kept between a fitted line's edge and the arc, in design units.
      *
      * Both are antialiased, so "touching exactly" still interleaves pixels. Small
@@ -1816,6 +1856,116 @@ object TrioGeometry {
         return edge - half
     }
 
+    /** 侧边一颗珠子的参考半径：五柱 4.2，四柱 4.9。 */
+    @JvmStatic
+    fun flankBeadR(columns: Int): Float = if (columns == 5) 4.2f else 4.9f
+
+    /**
+     * 侧边珠排实际使用的珠半径：先按「信号点大小」放大参考值，再受 [maxBeadR] 封顶。
+     *
+     * 顺序不能反：放大是外观，封顶是墨盒的机械限制；先放大再封顶意味着超大的设置只是
+     * 停止生长，而不是把字形挤小。
+     */
+    @JvmStatic
+    fun flankDotR(columns: Int, scale: Float): Float =
+        minOf(flankBeadR(columns) * maxOf(0.01f, scale), maxBeadR())
+
+    /** 侧边 Wi-Fi 弧的线宽，取自环的实际线宽。 */
+    @JvmStatic
+    fun flankWifiStroke(ringStroke: Float): Float = ringStroke * FLANK_WIFI_STROKE_RATIO
+
+    /** 侧边内弧的半径：环外沿 + 间隔 + 弧宽一半，从环心量起。 */
+    @JvmStatic
+    fun flankWifiInnerR(ringStroke: Float, baseR: Float): Float {
+        val wifiStroke = flankWifiStroke(ringStroke)
+        return baseR + ringStroke * 0.5f + FLANK_WIFI_GAP + wifiStroke * 0.5f
+    }
+
+    /** 侧边外弧的半径：内弧再加一道弧宽和弧间距。 */
+    @JvmStatic
+    fun flankWifiOuterR(ringStroke: Float, baseR: Float): Float =
+        flankWifiInnerR(ringStroke, baseR) + flankWifiStroke(ringStroke) + FLANK_WIFI_ARC_GAP
+
+    /**
+     * 侧边 Wi-Fi 弧伸出环墨盒多远，设计单位。
+     *
+     * 环的墨盒就是环本身：描边外沿加上最宽的珠子。侧边弧是唯一故意画到墨盒之外的组件，
+     * 所以这段额外宽度要由 [hostAspect] 向宿主申请，否则状态栏会把外弧裁掉。
+     */
+    @JvmStatic
+    fun ringFlankWifiExtra(a: TrioAppearance?): Float {
+        if (a == null || !a.ring) return 0f
+        val left = a.ringZones.getOrNull(Prefs.ZONE_LEFT)?.contains(Prefs.PART_WIFI) == true
+        val right = a.ringZones.getOrNull(Prefs.ZONE_RIGHT)?.contains(Prefs.PART_WIFI) == true
+        if (!left && !right) return 0f
+        val stroke = a.ringStroke * RING_STROKE_RATIO
+        val reach = flankWifiOuterR(stroke, B_R) + flankWifiStroke(stroke) * 0.5f
+        // 一单位抗锯齿余量，外弧的毛边才不会被自己申请来的视图切掉。
+        return maxOf(0f, reach + 1f - INK_W * 0.5f)
+    }
+
+    /** 珠排中心在环上所占的角度半跨：按珠径与 [FLANK_BEAD_GAP] 反推。 */
+    @JvmStatic
+    fun flankRowHalfDeg(columns: Int, dotR: Float): Float {
+        val span = (columns - 1) * (2f * dotR + FLANK_BEAD_GAP) * 0.5f
+        return Math.toDegrees((span / B_R).toDouble()).toFloat()
+    }
+
+    /**
+     * 环为一条珠排开出的角度半宽，单位度。
+     *
+     * 珠排以 9 点/3 点居中，弧端是圆头，所以开口 = 珠排自身半跨 + 球径 + 半个线宽 +
+     * [FLANK_ROW_CLEARANCE]。只按珠排跨度切，外侧两颗会正好压在圆头上。
+     */
+    @JvmStatic
+    fun flankOpenHalfDeg(columns: Int, ringStroke: Float, dotR: Float): Float {
+        val clearance = dotR + ringStroke * 0.5f + FLANK_ROW_CLEARANCE
+        val half = flankRowHalfDeg(columns, dotR) +
+            Math.toDegrees((clearance / B_R).toDouble()).toFloat()
+        // 封顶，免得极端的点径把两侧弧切成碎环。
+        return minOf(half, 60f)
+    }
+
+    /**
+     * 环为 `part` 在侧边开出的角度半宽；`0` 表示该侧不开口。
+     *
+     * 空侧边保持闭合；珠排按自己的跨度开口；Wi-Fi 画在描边之外所以也不开口；其余组件
+     * （读数、时钟、闪电）按参考宽度的单元格切开口。
+     */
+    @JvmStatic
+    fun flankHalfDeg(part: Int, a: TrioAppearance): Float {
+        if (part == Prefs.PART_NONE) return 0f
+        val stroke = a.ringStroke * RING_STROKE_RATIO
+        val capR = stroke * 0.5f
+        val inkHalf = when {
+            Prefs.isSignalRow(part) -> {
+                val columns = a.signalColumns.coerceIn(4, 5)
+                return flankOpenHalfDeg(columns, stroke, flankDotR(columns, a.dotScaleFactor()))
+            }
+            part == Prefs.PART_WIFI -> return 0f
+            part == Prefs.PART_BOLT -> 7.5f * a.boltScaleFactor()
+            else -> FLANK_CELL_INK_HALF
+        }
+        val half = Math.toDegrees(
+            kotlin.math.asin(
+                ((inkHalf + NOTCH_PIECE_CLEARANCE + capR) / B_R).coerceIn(0f, 1f).toDouble(),
+            ),
+        ).toFloat()
+        return half.coerceIn(10f, GAP_WIDTH_DEG * 0.5f)
+    }
+
+    /** 侧边单元格的墨迹上限宽度：开口的平直弦长，但不超过墨盒的 60%。 */
+    @JvmStatic
+    fun flankCellWidth(halfDeg: Float): Float =
+        (2f * B_R * kotlin.math.sin(Math.toRadians(halfDeg.toDouble())).toFloat())
+            .coerceAtMost(INK_W * 0.6f)
+
+    /** 侧边单元格可用的高度：取中部带宽，最宽松的一段。 */
+    const val FLANK_CELL_ROOM_H = DOT_BOX_CENTRE
+
+    /** 侧边读数的参考半宽，尚未按真实字符串拟合。 */
+    private const val FLANK_CELL_INK_HALF = 17f
+
     /**
      * Width over height of the box an arrangement wants to be drawn in.
      *
@@ -1838,7 +1988,9 @@ object TrioGeometry {
         if (a.rect) {
             return RECT_INK_W / RECT_INK_H
         }
-        return INK_W / INK_H
+        // 两侧放了 Wi-Fi 时，外弧画在墨盒之外；宿主必须为它申请额外宽度，
+        // 否则状态栏会裁掉外侧那条弧。缩放仍由高度决定。
+        return (INK_W + 2f * ringFlankWifiExtra(a)) / INK_H
     }
 
 }

@@ -376,6 +376,42 @@ fun SettingsScreen(repository: SettingsRepository) {
         }
     }
 
+    // ---- 备份与恢复 ----
+    val backupContext = LocalContext.current
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                val json = repository.exportToJson()
+                backupContext.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(json.toByteArray(Charsets.UTF_8))
+                }
+                showMessage(backupContext.getString(R.string.backup_exported))
+            }.onFailure {
+                showMessage(backupContext.getString(R.string.backup_export_failed))
+            }
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                val json = backupContext.contentResolver.openInputStream(uri)?.use { input ->
+                    input.bufferedReader(Charsets.UTF_8).readText()
+                } ?: throw IllegalStateException("cannot read file")
+                val count = repository.importFromJson(json)
+                settings = repository.read()
+                showMessage(backupContext.getString(R.string.backup_imported, count))
+            }.onFailure {
+                showMessage(backupContext.getString(R.string.backup_import_failed))
+            }
+        }
+    }
+
     // The kill lands on System UI, not on this process, so the confirmation
     // outlives the dialog and has to be shown from here.
     LaunchedEffect(restarter.state) {
@@ -526,6 +562,10 @@ fun SettingsScreen(repository: SettingsRepository) {
                                         update { it.setFontPath("") }
                                         scope.launch { FontInstaller.remove(fontPath) }
                                     },
+                                    onExportBackup = {
+                                        exportLauncher.launch("honorduo_backup_${System.currentTimeMillis()}.json")
+                                    },
+                                    onImportBackup = { importLauncher.launch(arrayOf("application/json", "*/*")) },
                                 ) { block -> update(block) }
                             }
                         }
@@ -1688,6 +1728,16 @@ private fun LazyListScope.settingsTab(
             onClick = { onOpenPart(TrioSettingsPart.Clock) },
         )
     }
+
+    // Card 8: Bluetooth Battery (square ring component)
+    item {
+        SettingPreviewCard(
+            title = stringResource(R.string.show_bt_battery_title),
+            summary = stringResource(R.string.show_bt_battery_summary),
+            icon = ImageVector.vectorResource(R.drawable.ic_card_battery),
+            onClick = { onOpenPart(TrioSettingsPart.BtBattery) },
+        )
+    }
 }
 
 /** About: activation state, the counters, module info and the log switch. */
@@ -1697,6 +1747,8 @@ private fun LazyListScope.aboutTab(
     installingFont: Boolean,
     onChooseFont: () -> Unit,
     onClearFont: (String) -> Unit,
+    onExportBackup: () -> Unit,
+    onImportBackup: () -> Unit,
     update: ((SettingsRepository) -> Unit) -> Unit,
 ) {
     item { ActivatedRow(settings = settings, service = service) }
@@ -1765,6 +1817,24 @@ private fun LazyListScope.aboutTab(
                 insideMargin = SettingsItemMargin,
                 enabled = !nothingToClear && !installingFont,
                 onClick = { onClearFont(chosen) },
+            )
+        }
+    }
+    // 备份与恢复：导出全部设置为 JSON 文件，或从 JSON 文件导入。
+    item { SectionTitle(stringResource(R.string.group_backup)) }
+    item {
+        Card {
+            ArrowPreference(
+                title = stringResource(R.string.backup_export_title),
+                summary = stringResource(R.string.backup_export_summary),
+                insideMargin = SettingsItemMargin,
+                onClick = onExportBackup,
+            )
+            ArrowPreference(
+                title = stringResource(R.string.backup_import_title),
+                summary = stringResource(R.string.backup_import_summary),
+                insideMargin = SettingsItemMargin,
+                onClick = onImportBackup,
             )
         }
     }

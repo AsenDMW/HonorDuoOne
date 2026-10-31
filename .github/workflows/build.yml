@@ -164,11 +164,13 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
-      # A release is published for exactly two things: a pushed v* tag (the real
-      # release, body taken from docs/release-notes) and a manual run (a throwaway
-      # prerelease for testing). An ordinary branch push only produces the artifact.
+      # Real releases are published by hand, not by this job: the shipped APK must
+      # carry the same signature as v1.0.0 (the local release keystore), while CI
+      # signs with the tracked debug keystore - a CI build cannot upgrade a v1.0.0
+      # install. Tag runs therefore stop at the artifact; a manual dispatch still
+      # publishes a throwaway prerelease for testing.
       - name: Read release notes
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         id: notes
         run: |
           file="docs/release-notes/release-notes-${{ steps.stamp.outputs.name }}.md"
@@ -179,7 +181,7 @@ jobs:
           fi
 
       - name: Publish a release for the APK
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('ci-{0}-{1}', steps.stamp.outputs.code, github.run_number) }}

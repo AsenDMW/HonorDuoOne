@@ -16,6 +16,8 @@ import android.content.Context
 import android.content.res.Resources
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.os.Handler
+import android.os.Looper
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
@@ -82,6 +84,37 @@ internal object StatusBarRowManager {
     }
 
     fun rowsCount(): Int = synchronized(ROWS) { ROWS.size }
+
+    /**
+     * 生效范围让位：整行交还宿主（不画字形、不接管原生图标）。
+     *
+     * 由 [SystemBarHook.updateEffectiveScopeState] 在面板 / 锁屏状态跳变时置位，
+     * 绘制路径只读这一个标志，不再自己判断面板或锁屏。
+     */
+    @Volatile
+    var suppressed = false
+        private set
+
+    /**
+     * 进入 / 退出让位状态，并按新状态重排所有行。
+     *
+     * 相同值直接返回：面板切换钩子在一轮动画里可能报好几次同一个类型，逐次全量
+     * sync 会把下拉拖卡。
+     */
+    fun setSuppressed(on: Boolean) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            Handler(Looper.getMainLooper()).post { setSuppressed(on) }
+            return
+        }
+        if (suppressed == on) return
+        suppressed = on
+        for (row in snapshot()) {
+            syncRow(row, false)
+            row.row.requestLayout()
+            row.row.invalidate()
+        }
+        StatusBarIconManager.applyIconVisibility()
+    }
 
     fun snapshot(): List<Row> = synchronized(ROWS) { ArrayList(ROWS) }
 
@@ -150,6 +183,13 @@ internal object StatusBarRowManager {
     fun syncRow(row: Row, force: Boolean) {
         val a = TrioConfig.appearance()
         StatusBarIconManager.resolveIds(row.row.resources)
+        // 生效范围把这一处排除了：整行交还宿主，一个字形都不挂。
+        if (suppressed) {
+            unmountGlyph(row)
+            unmountOutViews(row)
+            StatusBarIconManager.release(row.battery)
+            return
+        }
         if (!a.enabled) {
             unmountGlyph(row)
             unmountOutViews(row)
@@ -205,6 +245,8 @@ internal object StatusBarRowManager {
      * gets to the runnable, and mounting is not something to repeat.
      */
     fun requestSync(row: Row) {
+        // 让位期间没有任何东西需要同步：挂载被抑制，重组会在退出让位时统一做。
+        if (suppressed) return
         synchronized(row) {
             if (row.syncPosted) return
             row.syncPosted = true
@@ -771,6 +813,7 @@ internal object StatusBarRowManager {
     }
 
     fun checkCapsuleAvoidance(rowView: ViewGroup) {
+        if (suppressed) return
         val isCapsule = (Refl.get(sIsCapsuleShownField, rowView) as? Boolean) ?: false
         val isColored = (Refl.get(sIsColoredCapsuleShownField, rowView) as? Boolean) ?: false
         val right = (Refl.get(sCapsuleRightField, rowView) as? Number)?.toInt() ?: 0

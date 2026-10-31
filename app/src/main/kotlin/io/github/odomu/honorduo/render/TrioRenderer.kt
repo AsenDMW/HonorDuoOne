@@ -65,6 +65,11 @@ object TrioRenderer {
     private val WIFI_OUTER = WIFI_PATHS[2]
     private val WIFI_INNER = WIFI_PATHS[3]
     private val ARC = RectF()
+    /** 蓝牙电量正方环用的可复用对象。 */
+    private val RING_RECT = RectF()
+    private val BT_RING_PATH = Path()
+    private val BT_SEG_PATH = Path()
+    private val BT_PATH_MEASURE = PathMeasure()
     /**
      * The bolt path's own width.
      *
@@ -187,6 +192,15 @@ object TrioRenderer {
      */
     private val CAPSULE = Path()
     private val RECT_RECT = RectF()
+
+    /**
+     * 圆环分段复用的两块缓冲：`(起始角, 跨度)` 对，以及各处的角度缺口。
+     *
+     * 最多四处开口（上、下、左、右），所以 8 个 float 足够；每帧的轨道与进度都会重用，
+     * 不重新分配列表。
+     */
+    private val SEGMENTS = FloatArray(8)
+    private val GAPS = FloatArray(8)
 
     /**
      * Scratch for the ink box [textInkHeight] measures; never kept.
@@ -470,7 +484,14 @@ object TrioRenderer {
         mobileLevel: Int, levels: IntArray?, type: String?, role: Int, fg: Int,
         a: TrioAppearance, r: TrioAppearance.Ring,
     ) {
-        drawBattery(c, level, role, fg, a, r.gapStart(), r.gapEnd(), r.sweep(), r.arcStart(), charging)
+        drawBattery(
+            c, level, role, fg, a, r.gapStart(), r.gapEnd(), r.sweep(), r.arcStart(), charging,
+            // 两侧放了珠排或组件时，圆弧要在 9 点/3 点处让出开口。
+            openLeft = r.hasLeftDots || r.leftFlankHalfDeg > 0f,
+            openRight = r.hasRightDots || r.rightFlankHalfDeg > 0f,
+            topHalfDeg = r.topHalfDeg, bottomHalfDeg = r.bottomHalfDeg,
+            leftFlankHalfDeg = r.leftFlankHalfDeg, rightFlankHalfDeg = r.rightFlankHalfDeg,
+        )
         for (z in 0 until 3) {
             val chain = a.ringZones.getOrNull(z)
             val hasDotInZone = chain != null && chain.any { p ->
@@ -591,75 +612,248 @@ object TrioRenderer {
                         }
                         }
                     }
+                } else if (part == Prefs.PART_BT_BATTERY && TrioState.sBtBatteryLevel in 0..100) {
+                    // 蓝牙电量正方环组件：环内是电量数字，环的描边长度按电量走。
+                    val slotCentre = TrioGeometry.zoneTextCy(z, a.ringStroke) -
+                        TrioGeometry.ZONE_CY[z]
+                    drawBtBatterySquareRing(
+                        c, TrioState.sBtBatteryLevel, fg, a,
+                        anchorX = 0f, cy = slotCentre, align = CellAlign.CENTRE,
+                        width = width, heightHint = TrioGeometry.zoneTextRoomH(z),
+                    )
                 } else {
-                    val text = when (part) {
-                        Prefs.PART_VALUE -> valueText(level, a)
-                        Prefs.PART_TYPE -> type
-                        Prefs.PART_POWER -> powerText()
-                        Prefs.PART_RUNNING -> powerText()
-                        Prefs.PART_TEMP -> tempText()
-                        Prefs.PART_FPS -> fpsText()
-                        else -> TrioState.sClockText
-                    }
-                    if (!text.isNullOrEmpty()) {
-                        val weight = when (part) {
-                            Prefs.PART_VALUE -> a.valueWeight
-                            Prefs.PART_TYPE -> a.typeWeight
-                            Prefs.PART_POWER, Prefs.PART_RUNNING,
-                            Prefs.PART_TEMP, Prefs.PART_FPS,
-                            -> a.perfTypeWeight()
-                            else -> a.clockWeight
-                        }
-                        val requested = when (part) {
-                            Prefs.PART_VALUE -> maxOf(a.valueSize.toFloat(), 50f)
-                            Prefs.PART_TYPE -> maxOf(a.typeSize.toFloat(), 46f)
-                            Prefs.PART_POWER, Prefs.PART_RUNNING,
-                            Prefs.PART_TEMP, Prefs.PART_FPS,
-                            -> maxOf(a.perfReadingSize().toFloat(), 46f)
-                            else -> maxOf(a.clockSize.toFloat(), 46f)
-                        }
-                        applyWeight(weight)
-                        TEXT.textSize = requested
-                        // Type is fitted to the THIRD it sits in, not to the small placement box that positions a drawn figure (28/44/20 units).
-                        val room = TrioGeometry.zoneTextRoomH(z)
-                        val suffixScale = if (part == Prefs.PART_TYPE) a.typeSuffixScale else 100
-                        // The height cap is a straight ratio at the requested size.
-                        val inkAtRequested = max(1f, textInkHeight(text, requested))
-                        val maxByHeight = requested * room / inkAtRequested
-                        // The width cap is NOT independent of the answer.
-                        var fitted = maxByHeight
-                        for (pass in 0 until 4) {
-                            val inkH = max(1f, textInkHeight(text, fitted))
-                            val maxByWidth = fitSize(
-                                text, requested,
-                                TrioGeometry.zoneTextRoomW(z, a.ringStroke, inkH), suffixScale
-                            )
-                            val next = min(maxByHeight, maxByWidth)
-                            if (abs(next - fitted) < 0.05f) {
-                                fitted = next
-                                break
-                            }
-                            fitted = next
-                        }
-                        // Centred in the band, and on its INK rather than its metrics.
-                        val slotCentre = TrioGeometry.zoneTextCy(z, a.ringStroke) -
-                                TrioGeometry.ZONE_CY[z]
-                        val baseline = inkCentredBaseline(text, fitted, slotCentre)
-                        if (part == Prefs.PART_TYPE) {
-                            drawType(c, text, 0f, baseline, fitted, fg, a)
-                        } else {
-                            TEXT.textAlign = Paint.Align.CENTER
-                            TEXT.textSize = fitted
-                            val tempIsHigh = a.roleColorsTemp && part == Prefs.PART_TEMP &&
-                                TrioState.sBatteryTempC != TrioState.TEMP_UNKNOWN &&
-                                TrioState.sBatteryTempC >= a.tempThreshold
-                            TEXT.color = if (tempIsHigh) (if (isDarkBackground(fg)) a.highTempOnDark else a.highTempOnLight) else fg
-                            c.drawText(text, 0f, baseline, TEXT)
-                        }
-                    }
+                    // 读数、时钟等文字件统一按所在带宽拟合，侧边复用同一套规则。
+                    drawRingText(c, part, type, level, fg, a, z, 0f)
                 }
             }
         }
+        // 环两侧的珠排：以 9 点/3 点居中的一小段圆弧切口，跨度由珠径与柱数反推。
+        if (r.hasLeftDots || r.hasRightDots) {
+            val columns = a.signalColumns.coerceIn(4, 5)
+            val dataSlot = TrioState.sDataSlot
+            val dataLevel = if (levels != null && dataSlot in levels.indices && levels[dataSlot] >= 0) {
+                levels[dataSlot]
+            } else {
+                mobileLevel
+            }
+            val sim1Level = if (levels != null && levels.isNotEmpty() && levels[0] >= 0) levels[0] else mobileLevel
+            val sim2Level = if (levels != null && levels.size > 1 && levels[1] >= 0) levels[1] else mobileLevel
+            val dotR = TrioGeometry.flankDotR(columns, a.dotScaleFactor())
+            val inactive = withAlpha(fg, a.trackAlpha)
+            val rho = TrioGeometry.B_R
+            val halfDiv = (columns - 1) * 0.5f
+            val rowHalfAngle = Math.toRadians(
+                TrioGeometry.flankRowHalfDeg(columns, dotR).toDouble(),
+            ).toFloat()
+            if (r.hasLeftDots) {
+                val part = r.parts[Prefs.ZONE_LEFT]
+                val rowLevel = when (part) {
+                    Prefs.PART_SIM_1 -> sim1Level
+                    Prefs.PART_SIM_2 -> sim2Level
+                    else -> dataLevel
+                }
+                val active = if (rowLevel < 0) 0 else min(columns, rowLevel)
+                for (dot in 0 until columns) {
+                    val t = (dot - halfDiv) / halfDiv
+                    val angle = Math.toRadians(180.0).toFloat() + t * rowHalfAngle
+                    val x = TrioGeometry.B_CX + rho * cos(angle)
+                    val y = TrioGeometry.B_CY + rho * sin(angle)
+                    FILL.color = if (dot < active) fg else inactive
+                    c.drawCircle(x, y, dotR, FILL)
+                }
+            }
+            if (r.hasRightDots) {
+                val part = r.parts[Prefs.ZONE_RIGHT]
+                val rowLevel = when (part) {
+                    Prefs.PART_SIM_2 -> sim2Level
+                    Prefs.PART_SIM_1 -> sim1Level
+                    else -> dataLevel
+                }
+                val active = if (rowLevel < 0) 0 else min(columns, rowLevel)
+                for (dot in 0 until columns) {
+                    val t = (dot - halfDiv) / halfDiv
+                    val angle = t * rowHalfAngle
+                    val x = TrioGeometry.B_CX + rho * cos(angle)
+                    val y = TrioGeometry.B_CY + rho * sin(angle)
+                    FILL.color = if (dot < active) fg else inactive
+                    c.drawCircle(x, y, dotR, FILL)
+                }
+            }
+        }
+        // 两侧 Wi-Fi 画成两段同心弧，落在环的描边之外。
+        if (r.hasLeftWifi) drawRingFlankWifi(c, wifiLevel, fg, a, isLeft = true)
+        if (r.hasRightWifi) drawRingFlankWifi(c, wifiLevel, fg, a, isLeft = false)
+        // 其余组件落在为它切出的开口里，以 9 点/3 点居中。
+        drawFlankPiece(c, level, quickCharging, type, fg, a, r, Prefs.ZONE_LEFT, isLeft = true)
+        drawFlankPiece(c, level, quickCharging, type, fg, a, r, Prefs.ZONE_RIGHT, isLeft = false)
+    }
+
+    /**
+     * 环两侧的一个非珠排、非 Wi-Fi 组件：读数、时钟、电量环或闪电。
+     *
+     * 开口由 [TrioAppearance.Ring.flankHalfDeg] 切出，组件按该开口的平直弦宽拟合，
+     * 两边因此不可能对「有多少地方可用」给出不同答案。
+     */
+    private fun drawFlankPiece(
+        c: Canvas, level: Int, quickCharging: Boolean, type: String?,
+        fg: Int, a: TrioAppearance, r: TrioAppearance.Ring, zone: Int, isLeft: Boolean,
+    ) {
+        val part = r.parts[zone]
+        if (part == Prefs.PART_NONE || Prefs.isSignalRow(part) || part == Prefs.PART_WIFI) return
+        val half = r.flankHalfDeg(zone)
+        if (half <= 0f) return
+        val cx = if (isLeft) {
+            TrioGeometry.B_CX - TrioGeometry.B_R
+        } else {
+            TrioGeometry.B_CX + TrioGeometry.B_R
+        }
+        c.withTranslation(cx, TrioGeometry.B_CY) {
+            if (part == Prefs.PART_BOLT) {
+                val roomW = TrioGeometry.flankCellWidth(half) -
+                    2f * TrioGeometry.NOTCH_PIECE_CLEARANCE
+                val roomH = TrioGeometry.FLANK_CELL_ROOM_H
+                val fit = min(roomW / 15f, roomH / TrioGeometry.BOLT_INK_H)
+                val scale = fit * a.boltScaleFactor()
+                c.scale(scale, scale)
+                c.translate(-TrioGeometry.BOLT_CX_REF, -TrioGeometry.BOLT_INK_CY)
+                drawBoltShape(c, if (quickCharging) TrioGeometry.QUICK_CHARGE else fg, a)
+            } else if (part == Prefs.PART_BT_BATTERY && TrioState.sBtBatteryLevel in 0..100) {
+                // 蓝牙电量正方环也能放在侧边：边长按开口的宽度取。
+                drawBtBatterySquareRing(
+                    c, TrioState.sBtBatteryLevel, fg, a,
+                    anchorX = 0f, cy = 0f, align = CellAlign.CENTRE,
+                    width = TrioGeometry.flankCellWidth(half) -
+                        2f * TrioGeometry.NOTCH_PIECE_CLEARANCE,
+                    heightHint = TrioGeometry.FLANK_CELL_ROOM_H,
+                )
+            } else {
+                drawRingText(c, part, type, level, fg, a, -1, half)
+            }
+        }
+    }
+
+    /**
+     * 环里的一段读数：上下/中部的一个带宽，或侧边的一个单元格。
+     *
+     * `band` 为负表示侧边，此时可用的宽度是为它切出的单元格，而不是带宽的弦；
+     * 两处共用这一套拟合，同一个字符串才不会在两侧和中间得到两种大小。
+     */
+    private fun drawRingText(
+        c: Canvas, part: Int, type: String?, level: Int, fg: Int,
+        a: TrioAppearance, band: Int, flankHalfDeg: Float,
+    ) {
+        val flank = band < 0
+        val text = when (part) {
+            Prefs.PART_VALUE -> valueText(level, a)
+            Prefs.PART_TYPE -> type
+            Prefs.PART_POWER -> powerText()
+            Prefs.PART_RUNNING -> powerText()
+            Prefs.PART_TEMP -> tempText()
+            Prefs.PART_FPS -> fpsText()
+            else -> TrioState.sClockText
+        }
+        if (text.isNullOrEmpty()) return
+        val weight = when (part) {
+            Prefs.PART_VALUE -> a.valueWeight
+            Prefs.PART_TYPE -> a.typeWeight
+            Prefs.PART_POWER, Prefs.PART_RUNNING,
+            Prefs.PART_TEMP, Prefs.PART_FPS,
+            -> a.perfTypeWeight()
+            else -> a.clockWeight
+        }
+        val requested = when (part) {
+            Prefs.PART_VALUE -> maxOf(a.valueSize.toFloat(), 50f)
+            Prefs.PART_TYPE -> maxOf(a.typeSize.toFloat(), 46f)
+            Prefs.PART_POWER, Prefs.PART_RUNNING,
+            Prefs.PART_TEMP, Prefs.PART_FPS,
+            -> maxOf(a.perfReadingSize().toFloat(), 46f)
+            else -> maxOf(a.clockSize.toFloat(), 46f)
+        }
+        applyWeight(weight)
+        TEXT.textSize = requested
+        // 文字按它所在的带宽拟合，而不是按定位用的那个小方框（28/44/20 单位）。
+        val room = if (flank) TrioGeometry.FLANK_CELL_ROOM_H else TrioGeometry.zoneTextRoomH(band)
+        val suffixScale = if (part == Prefs.PART_TYPE) a.typeSuffixScale else 100
+        // 高度上限是请求字号下的一个直线比例。
+        val inkAtRequested = max(1f, textInkHeight(text, requested))
+        val maxByHeight = requested * room / inkAtRequested
+        // 宽度上限并不独立于结果：带宽是随字号收窄的弦，侧边则是开口的平直宽度。
+        val flankRoomW = TrioGeometry.flankCellWidth(flankHalfDeg) -
+            2f * TrioGeometry.NOTCH_PIECE_CLEARANCE
+        var fitted = maxByHeight
+        for (pass in 0 until 4) {
+            val inkH = max(1f, textInkHeight(text, fitted))
+            val roomW = if (flank) {
+                flankRoomW
+            } else {
+                TrioGeometry.zoneTextRoomW(band, a.ringStroke, inkH)
+            }
+            val next = min(maxByHeight, fitSize(text, requested, roomW, suffixScale))
+            if (abs(next - fitted) < 0.05f) {
+                fitted = next
+                break
+            }
+            fitted = next
+        }
+        // 按墨迹而不是字体度量居中。
+        val slotCentre = if (flank) {
+            0f
+        } else {
+            TrioGeometry.zoneTextCy(band, a.ringStroke) - TrioGeometry.ZONE_CY[band]
+        }
+        val baseline = inkCentredBaseline(text, fitted, slotCentre)
+        if (part == Prefs.PART_TYPE) {
+            drawType(c, text, 0f, baseline, fitted, fg, a)
+            return
+        }
+        TEXT.textAlign = Paint.Align.CENTER
+        TEXT.textSize = fitted
+        val tempIsHigh = a.roleColorsTemp && part == Prefs.PART_TEMP &&
+            TrioState.sBatteryTempC != TrioState.TEMP_UNKNOWN &&
+            TrioState.sBatteryTempC >= a.tempThreshold
+        TEXT.color = if (tempIsHigh) {
+            if (isDarkBackground(fg)) a.highTempOnDark else a.highTempOnLight
+        } else {
+            fg
+        }
+        c.drawText(text, 0f, baseline, TEXT)
+    }
+
+    /**
+     * 环两侧的 Wi-Fi：两段同心弧，落在环的描边之外。
+     *
+     * 外弧故意画在墨盒之外，宿主宽度由 `TrioGeometry.hostAspect` 为它加宽，
+     * 否则状态栏会把外侧那条裁掉。
+     */
+    private fun drawRingFlankWifi(
+        c: Canvas, wifiLevel: Int, fg: Int, a: TrioAppearance, isLeft: Boolean,
+    ) {
+        val cx = TrioGeometry.B_CX
+        val cy = TrioGeometry.B_CY
+        val inactive = withAlpha(fg, a.trackAlpha)
+        val ringStroke = a.ringStroke * TrioGeometry.RING_STROKE_RATIO
+        val strokeWidth = TrioGeometry.flankWifiStroke(ringStroke)
+        val innerR = TrioGeometry.flankWifiInnerR(ringStroke, TrioGeometry.B_R)
+        val outerR = TrioGeometry.flankWifiOuterR(ringStroke, TrioGeometry.B_R)
+        STROKE.strokeWidth = strokeWidth
+        STROKE.strokeCap = Paint.Cap.ROUND
+        STROKE.style = Paint.Style.STROKE
+        // 扇形保留自己的跨度，只有半径跟着环走，内弧才不会压到环的描边上。
+        val centreDeg = if (isLeft) 180f else 0f
+
+        ARC.set(cx - innerR, cy - innerR, cx + innerR, cy + innerR)
+        STROKE.color = if (wifiLevel >= 1) fg else inactive
+        c.drawArc(
+            ARC, centreDeg - TrioGeometry.FLANK_WIFI_SWEEP_INNER * 0.5f,
+            TrioGeometry.FLANK_WIFI_SWEEP_INNER, false, STROKE,
+        )
+
+        ARC.set(cx - outerR, cy - outerR, cx + outerR, cy + outerR)
+        STROKE.color = if (wifiLevel >= 3) fg else inactive
+        c.drawArc(
+            ARC, centreDeg - TrioGeometry.FLANK_WIFI_SWEEP_OUTER * 0.5f,
+            TrioGeometry.FLANK_WIFI_SWEEP_OUTER, false, STROKE,
+        )
     }
 
     /**
@@ -815,6 +1009,14 @@ object TrioRenderer {
             drawCapsuleDots(canvas, mobileLevel, slotLevels, cap.dual, fg, a, cap, left, right, wifiLevel)
         }
 
+        // 胶囊两端是半圆端：只放行 Wi-Fi 弧。
+        if (cap.parts[Prefs.ZONE_LEFT] == Prefs.PART_WIFI) {
+            drawCapsuleFlankWifi(canvas, stroke, wifiLevel, fg, a, left, right, isLeft = true)
+        }
+        if (cap.parts[Prefs.ZONE_RIGHT] == Prefs.PART_WIFI) {
+            drawCapsuleFlankWifi(canvas, stroke, wifiLevel, fg, a, left, right, isLeft = false)
+        }
+
         // Three bands, the same three the ring has: the two openings and the interior.
         drawCapsuleCell(
             canvas, stroke, TrioZones.Zone.TOP, cap, level, quickCharging,
@@ -828,6 +1030,41 @@ object TrioRenderer {
             canvas, stroke, TrioZones.Zone.BOTTOM, cap, level, quickCharging,
             wifiLevel, mobileType, fg, a, left, right,
         )
+    }
+
+    /**
+     * 胶囊端部的两段 Wi-Fi 弧：半径取端部半圆，内外两条同心。
+     *
+     * 端部只有半圆可用，所以弧以端口中心左右对称铺开；内弧在 Wi-Fi 至少一格时点亮，
+     * 外弧至少三格，与环内的分档一致。
+     */
+    private fun drawCapsuleFlankWifi(
+        c: Canvas, stroke: Float, wifiLevel: Int, fg: Int, a: TrioAppearance,
+        left: Float, right: Float, isLeft: Boolean,
+    ) {
+        val capR = TrioGeometry.CAP_RADIUS
+        val capCy = (TrioGeometry.CAP_TOP + TrioGeometry.CAP_BOTTOM) * 0.5f
+        val arcCenterCx = if (isLeft) left + capR else right - capR
+        val inactive = withAlpha(fg, a.trackAlpha)
+        val strokeWidth = stroke * 0.78f
+        STROKE.strokeWidth = strokeWidth
+        STROKE.strokeCap = Paint.Cap.ROUND
+        STROKE.style = Paint.Style.STROKE
+
+        // 三个数依次是起始角、跨度、半径相对端部半圆的外扩量。
+        val arcs = if (isLeft) {
+            arrayOf(Triple(156f, 48f, 9.0f), Triple(144f, 72f, 19.0f))
+        } else {
+            arrayOf(Triple(-24f, 48f, 9.0f), Triple(-36f, 72f, 19.0f))
+        }
+        for (idx in arcs.indices) {
+            val (startAngle, sweepAngle, offset) = arcs[idx]
+            val r = capR + offset
+            ARC.set(arcCenterCx - r, capCy - r, arcCenterCx + r, capCy + r)
+            val active = if (idx == 0) wifiLevel >= 1 else wifiLevel >= 3
+            STROKE.color = if (active) fg else inactive
+            c.drawArc(ARC, startAngle, sweepAngle, false, STROKE)
+        }
     }
 
     /**
@@ -848,8 +1085,8 @@ object TrioRenderer {
             return
         }
         val part = cap.parts[band.ordinal]
-        // 上部现在和中部一样能放两件：第二件是靠右对齐的另一格。
-        val second = if (band == TrioZones.Zone.TOP) cap.second[band.ordinal] else Prefs.PART_NONE
+        // 上部只放一件：开口空间有限，两件会把读数挤小；中部才并排。
+        val second = Prefs.PART_NONE
         if (part == Prefs.PART_NONE && second == Prefs.PART_NONE) {
             return
         }
@@ -1027,6 +1264,10 @@ object TrioRenderer {
                     mobile = false, connected = TrioState.sWifiLevel >= 0, scale = s,
                 )
             }
+            // 蓝牙电量正方环组件：圆角矩形描边代表电量进度，环内是电量数字。
+            Prefs.PART_BT_BATTERY -> drawBtBatterySquareRing(
+                c, TrioState.sBtBatteryLevel, fg, a, anchorX, cy, align, width, heightHint,
+            )
             else -> Unit
         }
     }
@@ -1429,6 +1670,66 @@ object TrioRenderer {
                 }
             }
         }
+
+        // 两侧半圆端的珠行：沿端部圆弧排布，跨度取 55°，整排以端部左右居中。
+        val leftFlank = cap?.dotsIn(TrioZones.Zone.LEFT) == true
+        val rightFlank = cap?.dotsIn(TrioZones.Zone.RIGHT) == true
+        if (leftFlank || rightFlank) {
+            val capCy = (TrioGeometry.CAP_TOP + TrioGeometry.CAP_BOTTOM) * 0.5f
+            val capR = TrioGeometry.CAP_RADIUS
+            val sim1Level = if (slotLevels != null && slotLevels.isNotEmpty() && slotLevels[0] >= 0) {
+                slotLevels[0]
+            } else {
+                dataLevel
+            }
+            val sim2Level = if (slotLevels != null && slotLevels.size > 1 && slotLevels[1] >= 0) {
+                slotLevels[1]
+            } else {
+                dataLevel
+            }
+            val halfDiv = (columns - 1) * 0.5f
+            val arcHalfAngle = Math.toRadians(55.0).toFloat()
+            // 端部空间比开口窄，珠径也略小一档。
+            val flankDotR = (if (columns == 5) 4.0f else 4.6f) * a.dotScaleFactor()
+            if (leftFlank) {
+                val leftPart = a.ringZones.getOrNull(Prefs.ZONE_LEFT)?.firstOrNull { Prefs.isSignalRow(it) }
+                val lLevel = when (leftPart) {
+                    Prefs.PART_SIM_1 -> sim1Level
+                    Prefs.PART_SIM_2 -> sim2Level
+                    else -> dataLevel
+                }
+                val lActive = if (lLevel < 0) 0 else min(columns, lLevel)
+                // 左端圆心在半圆端中心，180° 是朝左的正中。
+                val arcCenterCx = left + capR
+                for (i in 0 until columns) {
+                    val t = (i - halfDiv) / halfDiv
+                    val angle = Math.toRadians(180.0).toFloat() + t * arcHalfAngle
+                    val x = arcCenterCx + capR * cos(angle)
+                    val y = capCy + capR * sin(angle)
+                    FILL.color = if (i < lActive) fg else inactive
+                    c.drawCircle(x, y, flankDotR, FILL)
+                }
+            }
+            if (rightFlank) {
+                val rightPart = a.ringZones.getOrNull(Prefs.ZONE_RIGHT)?.firstOrNull { Prefs.isSignalRow(it) }
+                val rLevel = when (rightPart) {
+                    Prefs.PART_SIM_2 -> sim2Level
+                    Prefs.PART_SIM_1 -> sim1Level
+                    else -> dataLevel
+                }
+                val rActive = if (rLevel < 0) 0 else min(columns, rLevel)
+                // 右端圆心在半圆端中心，0° 是朝右的正中。
+                val arcCenterCx = right - capR
+                for (i in 0 until columns) {
+                    val t = (i - halfDiv) / halfDiv
+                    val angle = t * arcHalfAngle
+                    val x = arcCenterCx + capR * cos(angle)
+                    val y = capCy + capR * sin(angle)
+                    FILL.color = if (i < rActive) fg else inactive
+                    c.drawCircle(x, y, flankDotR, FILL)
+                }
+            }
+        }
     }
 
     /**
@@ -1820,8 +2121,11 @@ object TrioRenderer {
         c: Canvas, level: Int, role: Int, fg: Int,
         a: TrioAppearance, gapStart: Float, gapEnd: Float,
         sweep: Float, start: Float, charging: Boolean,
+        openLeft: Boolean = false, openRight: Boolean = false,
+        topHalfDeg: Float = 0f, bottomHalfDeg: Float = 0f,
+        leftFlankHalfDeg: Float = 0f, rightFlankHalfDeg: Float = 0f,
     ) {
-        val ringStroke = a.ringStroke * 0.68f
+        val ringStroke = a.ringStroke * TrioGeometry.RING_STROKE_RATIO
         STROKE.strokeWidth = ringStroke
         val animated = a.animatesOutline(charging, level)
         // Breathing moves the whole ring; the other two move a light along it. One
@@ -1829,11 +2133,18 @@ object TrioRenderer {
         val wave = if (animated && a.boltAnim == Prefs.BOLT_ANIM_PULSE) pulseWave() else 1f
 
         STROKE.color = withAlpha(fg, a.trackAlpha)
-        batteryRing(c, 0f, 1f, gapStart, gapEnd, sweep, start)
+        batteryRing(
+            c, 0f, 1f, gapStart, gapEnd, sweep, start, openLeft, openRight,
+            leftFlankHalfDeg, rightFlankHalfDeg, topHalfDeg, bottomHalfDeg,
+        )
 
         if (level > 0) {
             STROKE.color = withAlpha(role, (255 * wave).toInt())
-            batteryRing(c, 0f, breathFraction(level, charging, a), gapStart, gapEnd, sweep, start)
+            batteryRing(
+                c, 0f, breathFraction(level, charging, a), gapStart, gapEnd, sweep, start,
+                openLeft, openRight,
+                leftFlankHalfDeg, rightFlankHalfDeg, topHalfDeg, bottomHalfDeg,
+            )
         }
         if (!animated) {
             return
@@ -1982,37 +2293,167 @@ object TrioRenderer {
     private fun batteryRing(
         c: Canvas, fromIn: Float, toIn: Float, gapStart: Float, gapEnd: Float,
         sweep: Float, start: Float,
+        openLeft: Boolean = false, openRight: Boolean = false,
+        leftFlankHalfDeg: Float = 0f, rightFlankHalfDeg: Float = 0f,
+        topHalfDeg: Float = 0f, bottomHalfDeg: Float = 0f,
     ) {
         val from = clamp01(fromIn)
         val to = clamp01(toIn)
         if (to <= from) {
             return
         }
-        val mouthStart = clamp01(gapStart)
-        val mouthEnd = clamp01(gapEnd)
-        // Path length that actually carries ink; the level is spread over it.
-        val drawn = mouthStart + (1f - mouthEnd)
-        if (drawn <= 0f) {
+        // 只有「整圈 + 12 点开口」才能走按进度切两段的快路径；下方开口或侧边开口
+        // 都要按角度缺口集合切分。
+        if (!openLeft && !openRight && sweep >= 360f) {
+            val mouthStart = clamp01(gapStart)
+            val mouthEnd = clamp01(gapEnd)
+            // Path length that actually carries ink; the level is spread over it.
+            val drawn = mouthStart + (1f - mouthEnd)
+            if (drawn <= 0f) {
+                return
+            }
+            val visibleFrom = from * drawn
+            val visibleTo = to * drawn
+            // First segment: visible progress [0, mouthStart] is path [0, mouthStart].
+            val firstEnd = min(visibleTo, mouthStart)
+            if (firstEnd > visibleFrom) {
+                arcByProgress(
+                    c, visibleFrom, firstEnd, TrioGeometry.B_CX, TrioGeometry.B_CY,
+                    TrioGeometry.B_R, sweep, start,
+                )
+            }
+            // Second segment: visible progress (mouthStart, drawn] is path (mouthEnd, 1].
+            val secondFrom = max(visibleFrom, mouthStart)
+            if (visibleTo > secondFrom) {
+                arcByProgress(
+                    c, mouthEnd + secondFrom - mouthStart, mouthEnd + visibleTo - mouthStart,
+                    TrioGeometry.B_CX, TrioGeometry.B_CY, TrioGeometry.B_R, sweep, start,
+                )
+            }
             return
         }
-        val visibleFrom = from * drawn
-        val visibleTo = to * drawn
-        // First segment: visible progress [0, mouthStart] is path [0, mouthStart].
-        val firstEnd = min(visibleTo, mouthStart)
-        if (firstEnd > visibleFrom) {
-            arcByProgress(
-                c, visibleFrom, firstEnd, TrioGeometry.B_CX, TrioGeometry.B_CY,
-                TrioGeometry.B_R, sweep, start,
-            )
+
+        // 分段缓冲每帧复用两次（轨道与进度），不重建列表。
+        val segCount = buildRingSegments(
+            SEGMENTS, GAPS, start, topHalfDeg, bottomHalfDeg, openLeft, openRight,
+            leftFlankHalfDeg, rightFlankHalfDeg,
+            Math.toDegrees((STROKE.strokeWidth / TrioGeometry.B_R).toDouble()).toFloat(),
+        )
+        var totalDrawn = 0f
+        for (i in 0 until segCount) totalDrawn += SEGMENTS[i * 2 + 1]
+        if (totalDrawn <= 0f) return
+
+        val startDrawn = from * totalDrawn
+        val endDrawn = to * totalDrawn
+        var curDist = 0f
+
+        for (i in 0 until segCount) {
+            val segStartDeg = SEGMENTS[i * 2]
+            val segSweepDeg = SEGMENTS[i * 2 + 1]
+            val segEndDist = curDist + segSweepDeg
+
+            val drawStart = max(startDrawn, curDist)
+            val drawEnd = min(endDrawn, segEndDist)
+
+            if (drawEnd > drawStart) {
+                val segDrawStartDeg = segStartDeg + (drawStart - curDist)
+                val segDrawSweep = drawEnd - drawStart
+                arc(
+                    c, TrioGeometry.B_CX, TrioGeometry.B_CY, TrioGeometry.B_R,
+                    segDrawStartDeg, segDrawSweep,
+                )
+            }
+            curDist = segEndDist
         }
-        // Second segment: visible progress (mouthStart, drawn] is path (mouthEnd, 1].
-        val secondFrom = max(visibleFrom, mouthStart)
-        if (visibleTo > secondFrom) {
-            arcByProgress(
-                c, mouthEnd + secondFrom - mouthStart, mouthEnd + visibleTo - mouthStart,
-                TrioGeometry.B_CX, TrioGeometry.B_CY, TrioGeometry.B_R, sweep, start,
-            )
+    }
+
+    /**
+     * 把圆环的可画分段写进 [out]，格式是 `(起始角, 跨度)` 对，返回写了几段。
+     *
+     * 各处的开口先收成「角度缺口」，圆弧再取补集：12 点与 6 点开口、两侧切口、
+     * 以及它们彼此的重叠，都由同一条规则处理，而不是写死角度。缓冲区由调用方持有，
+     * 因为每帧的轨道和进度都要各算一次。
+     */
+    private fun buildRingSegments(
+        out: FloatArray, gaps: FloatArray, arcStart: Float, topHalf: Float, bottomHalf: Float,
+        openLeft: Boolean, openRight: Boolean,
+        leftFlankHalf: Float, rightFlankHalf: Float, minSegDeg: Float,
+    ): Int {
+        var gapCount = 0
+        if (topHalf > 0f) {
+            gapCount = addRingGap(gaps, gapCount, arcStart, 270f - topHalf, 270f + topHalf)
         }
+        if (bottomHalf > 0f) {
+            gapCount = addRingGap(gaps, gapCount, arcStart, 90f - bottomHalf, 90f + bottomHalf)
+        }
+        if (openLeft) {
+            gapCount = addRingGap(gaps, gapCount, arcStart, 180f - leftFlankHalf, 180f + leftFlankHalf)
+        }
+        if (openRight) {
+            gapCount = addRingGap(gaps, gapCount, arcStart, -rightFlankHalf, rightFlankHalf)
+        }
+        // 最多四处缺口，按起点做一次插入排序就是最直白的正确写法。
+        for (i in 1 until gapCount) {
+            var j = i
+            while (j > 0 && gaps[j * 2] < gaps[(j - 1) * 2]) {
+                val s = gaps[j * 2]
+                val e = gaps[j * 2 + 1]
+                gaps[j * 2] = gaps[(j - 1) * 2]
+                gaps[j * 2 + 1] = gaps[(j - 1) * 2 + 1]
+                gaps[(j - 1) * 2] = s
+                gaps[(j - 1) * 2 + 1] = e
+                j--
+            }
+        }
+        val lapEnd = arcStart + 360f
+        var count = 0
+        var cursor = arcStart
+        for (i in 0 until gapCount) {
+            val gapFrom = gaps[i * 2]
+            val gapTo = gaps[i * 2 + 1]
+            if (gapFrom > cursor) {
+                count = addSegment(out, count, cursor, gapFrom - cursor, minSegDeg)
+            }
+            if (gapTo > cursor) cursor = gapTo
+        }
+        if (cursor < lapEnd) {
+            count = addSegment(out, count, cursor, lapEnd - cursor, minSegDeg)
+        }
+        return count
+    }
+
+    /**
+     * 把一个开口记为 `[anchor, anchor + 360)` 内的缺口。
+     *
+     * @return 新的缺口数量
+     */
+    private fun addRingGap(
+        gaps: FloatArray, count: Int, anchor: Float, fromDeg: Float, toDeg: Float,
+    ): Int {
+        if (count * 2 + 1 >= gaps.size) return count
+        var from = fromDeg
+        while (from < anchor) from += 360f
+        while (from >= anchor + 360f) from -= 360f
+        val to = minOf(from + (toDeg - fromDeg), anchor + 360f)
+        gaps[count * 2] = from
+        gaps[count * 2 + 1] = to
+        return count + 1
+    }
+
+    /**
+     * 追加一段弧，除非它短得画不成一段环。
+     *
+     * 很宽的侧边切口会在它与下一个开口之间留下一条细缝；比它自己的两个圆头还短的
+     * 残段画出来是墨点而不是弧，所以宁可让两处开口合并，也不留一个凸起。
+     */
+    private fun addSegment(
+        out: FloatArray, count: Int, startDeg: Float, sweepDeg: Float, minSegDeg: Float,
+    ): Int {
+        if (sweepDeg <= 0f || sweepDeg < minSegDeg) return count
+        if (count * 2 + 1 >= out.size) return count
+        out[count * 2] = startDeg
+        out[count * 2 + 1] = sweepDeg
+        return count + 1
     }
 
     private fun arcByProgress(
@@ -2157,6 +2598,62 @@ object TrioRenderer {
             STROKE.color = fg
             c.drawArc(ARC, BT_ARC_START + BT_ARC_SWEEP - progress, progress, false, STROKE)
         }
+    }
+
+    /**
+     * 蓝牙电量正方环组件：圆角矩形描边作为电量环，环内是电量数字。
+     *
+     * 环的描边分两层：底层是半透明轨道（整圈），上层是按电量比例填充的前景色。
+     * 数字用与读数一致的字重，居中放在环内。电量未知时调用方已拦截，这里只处理 0..100。
+     */
+    private fun drawBtBatterySquareRing(
+        c: Canvas, bt: Int, fg: Int, a: TrioAppearance,
+        anchorX: Float, cy: Float, align: CellAlign, width: Float, heightHint: Float,
+    ) {
+        if (bt !in 0..100) return
+        // 正方环边长取格子宽高的较小者，留 1 单位描边余量。
+        val limit = if (heightHint > 0f) minOf(width, heightHint) else width
+        val size = limit.coerceAtMost(40f).coerceAtLeast(16f)
+        val stroke = (size * 0.14f).coerceAtLeast(1.5f)
+        val half = size * 0.5f
+        val cx = when (align) {
+            CellAlign.LEFT -> anchorX + half
+            CellAlign.RIGHT -> anchorX - half
+            CellAlign.CENTRE -> anchorX
+        }
+        val radius = size * 0.28f
+        STROKE.style = Paint.Style.STROKE
+        STROKE.strokeWidth = stroke
+        STROKE.strokeCap = Paint.Cap.ROUND
+        // 底层轨道：整圈圆角矩形，半透明。
+        STROKE.color = withAlpha(fg, a.trackAlpha)
+        RING_RECT.set(cx - half, cy - half, cx + half, cy + half)
+        c.drawRoundRect(RING_RECT, radius, radius, STROKE)
+        // 上层进度：按电量比例画圆角矩形的一段。
+        if (bt > 0) {
+            val path = BT_RING_PATH
+            path.reset()
+            path.addRoundRect(cx - half, cy - half, cx + half, cy + half, radius, radius, Path.Direction.CW)
+            // 用 PathMeasure 取前 bt% 的长度，画出前景进度段。
+            val pm = BT_PATH_MEASURE
+            pm.setPath(path, false)
+            val total = pm.length
+            if (total > 0f) {
+                val segLen = total * bt / 100f
+                val seg = BT_SEG_PATH
+                pm.getSegment(0f, segLen, seg, true)
+                STROKE.color = fg
+                c.drawPath(seg, STROKE)
+            }
+        }
+        // 环内电量数字。
+        val text = bt.toString()
+        applyWeight(a.valueWeight)
+        val numSize = fitSize(text, size * 0.42f, size - stroke * 2f - 2f)
+        TEXT.color = fg
+        TEXT.textAlign = Paint.Align.CENTER
+        TEXT.textSize = numSize
+        c.drawText(text, cx, inkCentredBaseline(text, numSize, cy), TEXT)
     }
 
     // ---------- Pull-down morph (ported from HonorDuoOne's TrioFeature.drawMorph) ----------
@@ -3953,7 +4450,8 @@ object TrioRenderer {
             )
         }
         if (appearance?.ring == true) {
-            val extraW = maxOf(0f, appearance.ringSpacingX.toFloat() * 2f)
+            val extraW = maxOf(0f, appearance.ringSpacingX.toFloat() * 2f) +
+                2f * TrioGeometry.ringFlankWifiExtra(appearance)
             return inkScale(w, h, TrioGeometry.INK_W + extraW, TrioGeometry.INK_H)
         }
         return inkScale(w, h)

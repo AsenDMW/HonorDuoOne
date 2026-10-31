@@ -72,6 +72,8 @@
     <string name="drawing_hint_top">Top</string>
     <string name="drawing_hint_centre">Middle</string>
     <string name="drawing_hint_bottom">Bottom</string>
+    <string name="drawing_hint_left">Left</string>
+    <string name="drawing_hint_right">Right</string>
     <string name="drawing_state_title">Preview state</string>
     <string name="drawing_scene_normal">Normal</string>
     <string name="drawing_scene_charging">Charging</string>
@@ -121,7 +123,11 @@
     <string name="anti_burn_in_summary">Periodic micro-shifts to protect OLED from burn-in</string>
     <string name="show_wifi_title">Wi-Fi arcs</string>
     <string name="show_traffic_title">Traffic arrows</string>
+    <string name="show_bt_battery_title">Bluetooth battery</string>
+    <string name="show_bt_battery_summary">A square ring showing the connected Bluetooth earbud battery level, with the number inside; placeable in any cell.</string>
+    <string name="bt_battery_place_hint">The square ring has nothing else to tune: drag it into the cell you want on the Layout page.</string>
     <string name="ring_position_traffic">Traffic arrows position</string>
+    <string name="ring_position_bt_battery">Bluetooth battery position</string>
     <string name="show_traffic_summary">The left pair is mobile data up/down, the right pair is Wi-Fi; a side that is not connected is drawn grey.</string>
     <string name="show_wifi_summary">Draw the Wi-Fi arcs; the number of arcs follows the real signal level.</string>
 
@@ -388,12 +394,17 @@
     <string name="stacked_signal_title">Stacked</string>
     <string name="stacked_signal_summary">Draw the module\'s own dot rows outside the ring; off hands the signal back to MagicOS.</string>
     <string name="dual_signal_title">Dual-row signal</string>
-    <string name="dual_signal_summary">Replace the native signal cluster with drawn dual rows (bars for the primary SIM over dots for the secondary). Mutually exclusive with the trio glyph: the dual rows step aside while the glyph owns the signal.</string>
+    <string name="dual_signal_disables">Unavailable while Dual signal is on: the trio glyph does not draw the signal then.</string>
+    <string name="dual_signal_summary">Replace the native signal cluster with dual rows drawn in the out-signal look (capsule bars for the primary SIM over dots for the secondary). Column count follows 「4/5 bars」, row style follows 「Stack style」, arrows follow 「Show traffic activity icon」, and the type caption uses the dual-row label switch. Mutually exclusive with the ring/capsule: turning this on switches the trio glyph off.</string>
     <string name="glyph_dual_exclusive">Ring/capsule and dual rows are mutually exclusive: turning one on switches the other off.</string>
     <string name="dual_signal_label_title">Dual-row type label</string>
     <string name="dual_signal_label_summary">Show the network type (5G / 4G ...) beside the dual rows; the native type label disappears with the hidden signal group and is restored here.</string>
-    <string name="dual_signal_arrows_title">Dual-row traffic arrows</string>
-    <string name="dual_signal_arrows_summary">Show upload/download arrows beside the dual rows: mobile data on the left, Wi-Fi on the right; a disconnected side is drawn grey.</string>
+    <string name="effective_scope_title">Module scope</string>
+    <string name="scope_option_cc">Control Center</string>
+    <string name="scope_option_shade">Shade</string>
+    <string name="scope_option_keyguard">Lockscreen</string>
+    <string name="scope_all">Everywhere</string>
+    <string name="scope_list_separator">, </string>
     <string name="stack_label_title">Type placement</string>
     <string name="stack_label_left">Beside bars</string>
     <string name="stack_label_above">Above bars</string>
@@ -501,4 +512,15 @@
     <string name="capsule_no_scale_summary">Stops the status bar from shrinking while the live capsule is docked, answering with the system\'s own bounce-back animation.</string>
     <string name="panel_native_icons_title">Native icons while expanded</string>
     <string name="panel_native_icons_summary">Hands the row back to the native Wi-Fi / signal / battery icons while the panel is expanded, restoring the glyph on collapse. Mutually exclusive with pull-down morph; morph wins.</string>
+    <string name="magicos10_invert_title">MagicOS 10 invert compat</string>
+    <string name="magicos10_invert_summary">Some MagicOS 10 devices invert status bar icon colors. Enable to invert the glyph color along with the system icons.</string>
+    <string name="group_backup">Backup &amp; Restore</string>
+    <string name="backup_export_title">Export backup</string>
+    <string name="backup_export_summary">Export all settings as a JSON file.</string>
+    <string name="backup_import_title">Import backup</string>
+    <string name="backup_import_summary">Restore settings from a JSON file, overwriting current config.</string>
+    <string name="backup_exported">Settings exported</string>
+    <string name="backup_export_failed">Export failed</string>
+    <string name="backup_imported">Imported %1$d settings</string>
+    <string name="backup_import_failed">Import failed: invalid file format</string>
 </resources>

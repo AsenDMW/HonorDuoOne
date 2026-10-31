@@ -267,8 +267,9 @@ class SettingsRepository(context: Context) {
     /** Network-type label beside the dual-row signal - see [Prefs.KEY_DUAL_SIGNAL_LABEL]. */
     fun setDualSignalLabel(value: Boolean) = writeBoolean(Prefs.KEY_DUAL_SIGNAL_LABEL, value)
 
-    /** Traffic arrows beside the dual-row signal - see [Prefs.KEY_DUAL_SIGNAL_ARROWS]. */
-    fun setDualSignalArrows(value: Boolean) = writeBoolean(Prefs.KEY_DUAL_SIGNAL_ARROWS, value)
+    /** 模块生效范围（排除位掩码）- 见 [Prefs.KEY_EFFECTIVE_SCOPE]。 */
+    fun setEffectiveScope(value: Int) =
+        writeInt(Prefs.KEY_EFFECTIVE_SCOPE, Prefs.normalizeScope(value))
 
     /** Hides the secondary SIM's status-bar signal icon - see [Prefs.KEY_HIDE_SIM2]. */
     fun setHideSim2(value: Boolean) = writeBoolean(Prefs.KEY_HIDE_SIM2, value)
@@ -488,6 +489,9 @@ class SettingsRepository(context: Context) {
     /** Native icons while the panel is expanded - see [Prefs.KEY_PANEL_NATIVE_ICONS]. */
     fun setPanelNativeIcons(value: Boolean) = writeBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, value)
 
+    /** MagicOS 10 invert-color compensation - see [Prefs.KEY_MAGICOS10_INVERT]. */
+    fun setMagicos10Invert(value: Boolean) = writeBoolean(Prefs.KEY_MAGICOS10_INVERT, value)
+
     /**
      * Pushes every value currently in the app's own file to the framework.
      *
@@ -612,6 +616,7 @@ class SettingsRepository(context: Context) {
             prefs.putBoolean(Prefs.KEY_TRIO_KEEP_ICONS, snapshot.trioKeepIcons)
             prefs.putBoolean(Prefs.KEY_CAPSULE_NO_SCALE, snapshot.capsuleNoScale)
             prefs.putBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, snapshot.panelNativeIcons)
+            prefs.putBoolean(Prefs.KEY_MAGICOS10_INVERT, snapshot.magicos10Invert)
 
             prefs.putBoolean(Prefs.KEY_DEBUG_LOG, current.getBoolean(Prefs.KEY_DEBUG_LOG, Prefs.DEF_DEBUG_LOG))
         }
@@ -668,5 +673,60 @@ class SettingsRepository(context: Context) {
 
     private companion object {
         const val TAG = "HonorDuo"
+    }
+
+    // ---- 备份与恢复 ----
+
+    /**
+     * 把全部 SharedPreferences 导出为 JSON 字符串。
+     * 用于备份到用户选择的文件。所有键值（布尔/整型/字符串/浮点/长整型）均会被序列化。
+     */
+    fun exportToJson(): String {
+        val prefs = preferences().all
+        val obj = org.json.JSONObject()
+        for ((key, value) in prefs) {
+            when (value) {
+                is Boolean -> obj.put(key, value)
+                is Int -> obj.put(key, value)
+                is Long -> obj.put(key, value)
+                is Float -> obj.put(key, value.toDouble())
+                is String -> obj.put(key, value)
+                is Set<*> -> obj.put(key, org.json.JSONArray(value.filterIsInstance<String>()))
+                else -> obj.put(key, value?.toString() ?: "")
+            }
+        }
+        return obj.toString(2)
+    }
+
+    /**
+     * 从 JSON 字符串导入设置并写入 SharedPreferences，同时推送到框架。
+     * 返回成功写入的键数量；格式错误时抛出异常。
+     */
+    fun importFromJson(json: String): Int {
+        val obj = org.json.JSONObject(json)
+        val prefs = preferences()
+        var count = 0
+        prefs.edit(commit = true) {
+            for (key in obj.keys()) {
+                val value = obj.opt(key) ?: continue
+                when (value) {
+                    is Boolean -> putBoolean(key, value)
+                    is Int -> putInt(key, value)
+                    is Long -> putLong(key, value)
+                    is Double -> putFloat(key, value.toFloat())
+                    is String -> putString(key, value)
+                    is org.json.JSONArray -> {
+                        val set = HashSet<String>()
+                        for (i in 0 until value.length()) set.add(value.optString(i))
+                        putStringSet(key, set)
+                    }
+                    else -> putString(key, value.toString())
+                }
+                count++
+            }
+        }
+        // 推送全部到框架，使 SystemUI 立即生效。
+        syncAllToFramework()
+        return count
     }
 }

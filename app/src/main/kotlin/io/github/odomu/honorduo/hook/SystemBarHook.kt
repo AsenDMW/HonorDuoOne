@@ -4,6 +4,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import io.github.libxposed.api.XposedModule
+import io.github.odomu.honorduo.model.Prefs
 import io.github.odomu.honorduo.model.TrioConfig
 import io.github.odomu.honorduo.model.TrioState
 import io.github.odomu.honorduo.render.TrioRenderer
@@ -147,6 +148,8 @@ internal object SystemBarHook {
             val self = chain.thisObject
             if (self is ViewGroup) {
                 StatusBarRowManager.register(self)
+                // 生效范围需要一个 Context 才能监听锁屏；行挂上窗口就是最早的稳定时机。
+                ScopeTracker.start(self.context)
             }
             result
         }
@@ -295,5 +298,23 @@ internal object SystemBarHook {
             }
         }
         return hooked
+    }
+
+    /**
+     * 按当前面板 / 锁屏状态重算「模块生效范围」，决定整行是否让位给宿主。
+     *
+     * 只在状态跳变时调用（面板切换、锁屏开合、启动兜底），不是每帧 —— 里面会做一次
+     * 逐行 sync，跑在每次下拉动画上就会把下拉拖卡。
+     */
+    fun updateEffectiveScopeState() {
+        ScopeTracker.refreshKeyguard()
+        val a = TrioConfig.appearance()
+        val scope = a.effectiveScope
+        val excluded = a.enabled && scope != Prefs.SCOPE_ALL && (
+            ((scope and Prefs.SCOPE_BIT_CC) != 0 && ScopeTracker.controlCenterActive) ||
+                ((scope and Prefs.SCOPE_BIT_SHADE) != 0 && ScopeTracker.shadeActive) ||
+                ((scope and Prefs.SCOPE_BIT_KEYGUARD) != 0 && ScopeTracker.lockscreenActive)
+            )
+        StatusBarRowManager.setSuppressed(excluded)
     }
 }

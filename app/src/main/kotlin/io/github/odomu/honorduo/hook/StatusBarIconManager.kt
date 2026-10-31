@@ -129,6 +129,8 @@ internal object StatusBarIconManager {
      */
     fun isOwned(id: Int, a: TrioAppearance): Boolean = when {
         !a.enabled -> false
+        // 生效范围让位：这一处交给宿主，原生图标一律不归本模块管。
+        StatusBarRowManager.suppressed -> false
         // The pull-down panel is open and the user asked for the stock icons there.
         a.panelNativeIcons && TrioState.sPanelExpanded -> false
         id == wifiId -> a.glyph && a.ownsWifi()

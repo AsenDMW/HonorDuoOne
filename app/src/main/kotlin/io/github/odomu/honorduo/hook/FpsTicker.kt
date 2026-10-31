@@ -76,7 +76,8 @@ internal object FpsTicker {
 
     private fun isFpsActive(): Boolean {
         val a = TrioConfig.appearance()
-        return ScreenStateTracker.isScreenOn && a.enabled && (a.perfFps || (!a.glyph && a.hasRingPart(Prefs.PART_FPS)))
+        return ScreenStateTracker.isScreenOn && a.enabled && !StatusBarRowManager.suppressed &&
+            (a.perfFps || (!a.glyph && a.hasRingPart(Prefs.PART_FPS)))
     }
 
     private fun onScreenStateChanged(screenOn: Boolean) {

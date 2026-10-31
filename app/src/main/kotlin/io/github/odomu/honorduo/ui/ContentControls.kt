@@ -70,10 +70,11 @@ internal enum class ContentControl(val owner: TrioSettingsPart) {
     /**
      * Bluetooth earbud battery in place of the SIM 1 dots: off, an arc, or a number.
      *
-     * Owned by the signal card because it borrows that card's slot - the glyph draws it
-     * where the primary card's dots would sit.
+     * 由「蓝牙电量」卡片持有，而不是信号卡：设置页那张卡原来只说明排布页里可以放一个
+     * 正方环组件，点进去却没有任何属于它的行，是一张空弹层。画法本身仍借用卡 1 的
+     * 点位（字形把弧线/数字画在主卡信号点原本的位置），但行的归属跟着用户找它的地方走。
      */
-    BtBattery(TrioSettingsPart.Mobile),
+    BtBattery(TrioSettingsPart.BtBattery),
     /**
      * The dual-row signal: the module's own two-row reading in place of the native
      * cluster. A property of the signal card rather than a piece of the glyph, and
@@ -83,8 +84,6 @@ internal enum class ContentControl(val owner: TrioSettingsPart) {
     DualSignal(TrioSettingsPart.Mobile),
     /** The network-type label beside the dual rows; only exists with [DualSignal] on. */
     DualSignalLabel(TrioSettingsPart.Mobile),
-    /** 双排柱状图右侧的流量箭头组件；仅双排开启时有意义。 */
-    DualSignalArrows(TrioSettingsPart.Mobile),
     Sim1(TrioSettingsPart.Mobile),
     Sim2(TrioSettingsPart.Mobile),
     Value(TrioSettingsPart.Battery),
@@ -183,6 +182,8 @@ internal enum class ContentControl(val owner: TrioSettingsPart) {
      * are on.
      */
     PanelNativeIcons(TrioSettingsPart.Appearance),
+    /** MagicOS 10 反色兼容开关：字形颜色跟随系统反色。 */
+    Magicos10Invert(TrioSettingsPart.Appearance),
     ShadeHidePower(TrioSettingsPart.Shade),
     ShadeHideBell(TrioSettingsPart.Shade),
     /** 控制中心音量条长按弹荣耀媒体输出弹窗（HonorDuoBar 1.1.3）。 */
@@ -196,13 +197,21 @@ internal enum class ContentControl(val owner: TrioSettingsPart) {
     ShadeLunar(TrioSettingsPart.Shade),
     ShadeWeather(TrioSettingsPart.Shade),
     ShadeWeatherStyle(TrioSettingsPart.Shade),
+    /**
+     * 模块生效范围：控制中心 / 通知面板 / 锁屏界面里，哪些位置交给宿主。
+     *
+     * 一个全局规则，不属于任何一件组件，所以归在外观卡；它只在排布页画出来
+     * （见 [contentControlsFor] 的排除项），弹层里没有这一行。
+     */
+    EffectiveScope(TrioSettingsPart.Appearance),
 }
 
 internal fun contentControlsFor(part: TrioSettingsPart): List<ContentControl> =
     ContentControl.entries.filter {
         val matchesOwner = it.owner == part || (part == TrioSettingsPart.Battery && it == ContentControl.Bolt)
         matchesOwner && !(part == TrioSettingsPart.Appearance &&
-            (it == ContentControl.Enabled || it == ContentControl.MergeIcons || it == ContentControl.Style || it == ContentControl.AntiBurnIn))
+            (it == ContentControl.Enabled || it == ContentControl.MergeIcons || it == ContentControl.Style ||
+                it == ContentControl.AntiBurnIn || it == ContentControl.EffectiveScope))
     }
 
 /**
@@ -216,15 +225,17 @@ internal class ContentSearchLabel(val titleRes: Int, val summaryRes: Int? = null
 /**
  * 该项在搜索里的文案，null 表示它不参与搜索。
  *
- * 只有四类返回 null：`Enabled`、`MergeIcons`、`Style`、`AntiBurnIn` 被
- * [contentControlsFor] 排除在基础外观分区之外，分区里根本没有这一行，
+ * 只有五类返回 null：`Enabled`、`MergeIcons`、`Style`、`AntiBurnIn`、`EffectiveScope`
+ * 被 [contentControlsFor] 排除在基础外观分区之外（前三个和 `AntiBurnIn` 在排布页
+ * 顶部的功能区，`EffectiveScope` 也在排布页），弹层里根本没有这一行，
  * 搜出来也只会跳到一个没有它的弹层，所以干脆不列。
  */
 internal fun ContentControl.searchLabel(): ContentSearchLabel? = when (this) {
     ContentControl.Enabled,
     ContentControl.MergeIcons,
     ContentControl.Style,
-    ContentControl.AntiBurnIn -> null
+    ContentControl.AntiBurnIn,
+    ContentControl.EffectiveScope -> null
     ContentControl.SignalColumns -> ContentSearchLabel(R.string.signal_columns_title, R.string.signal_columns_summary)
     ContentControl.Wifi -> ContentSearchLabel(R.string.ring_position_wifi)
     ContentControl.ReplaceWifiIcon -> ContentSearchLabel(R.string.replace_wifi_icon_title, R.string.replace_wifi_icon_summary)
@@ -236,7 +247,6 @@ internal fun ContentControl.searchLabel(): ContentSearchLabel? = when (this) {
     ContentControl.BtBattery -> ContentSearchLabel(R.string.trio_bt_battery_title, R.string.trio_bt_battery_summary)
     ContentControl.DualSignal -> ContentSearchLabel(R.string.dual_signal_title, R.string.dual_signal_summary)
     ContentControl.DualSignalLabel -> ContentSearchLabel(R.string.dual_signal_label_title, R.string.dual_signal_label_summary)
-    ContentControl.DualSignalArrows -> ContentSearchLabel(R.string.dual_signal_arrows_title, R.string.dual_signal_arrows_summary)
     ContentControl.Sim1 -> ContentSearchLabel(R.string.show_sim_1_title)
     ContentControl.Sim2 -> ContentSearchLabel(R.string.show_sim_2_title)
     ContentControl.Value -> ContentSearchLabel(R.string.show_value_title)
@@ -277,6 +287,7 @@ internal fun ContentControl.searchLabel(): ContentSearchLabel? = when (this) {
     ContentControl.KeepIcons -> ContentSearchLabel(R.string.trio_keep_icons_title, R.string.trio_keep_icons_summary)
     ContentControl.CapsuleNoScale -> ContentSearchLabel(R.string.capsule_no_scale_title, R.string.capsule_no_scale_summary)
     ContentControl.PanelNativeIcons -> ContentSearchLabel(R.string.panel_native_icons_title, R.string.panel_native_icons_summary)
+    ContentControl.Magicos10Invert -> ContentSearchLabel(R.string.magicos10_invert_title, R.string.magicos10_invert_summary)
     ContentControl.ShadeHidePower -> ContentSearchLabel(R.string.shade_hide_power_title, R.string.shade_hide_power_summary)
     ContentControl.ShadeHideBell -> ContentSearchLabel(R.string.shade_hide_bell_title, R.string.shade_hide_bell_summary)
     ContentControl.CcVolumeLongpress -> ContentSearchLabel(R.string.cc_volume_longpress_title, R.string.cc_volume_longpress_summary)
@@ -345,14 +356,20 @@ internal fun ContentControlRow(
             summaryRes = R.string.anti_burn_in_summary,
             dependencies = emptyList(),
         ) { value -> update { it.setAntiBurnIn(value) } }
-        ContentControl.SignalColumns -> if (a.stackedOut()) {
+        // 4柱/5柱对「双排信号」同样生效（双排就是这组柱子本身），所以双排开着时不能藏起来，
+        // 否则这个设置找不到入口，只能继承上次的值。
+        ContentControl.SignalColumns -> if (a.dualSignal || a.stackedOut()) {
             val columns = listOf(4, 5)
             ContentChoice(
                 selected = columns.indexOf(settings.signalColumns).coerceAtLeast(0),
                 title = R.string.signal_columns_title,
                 summaryRes = R.string.signal_columns_summary,
                 options = listOf(R.string.signal_columns_4, R.string.signal_columns_5),
-                dependencies = listOf(a.mobile to R.string.show_mobile_title),
+                dependencies = if (a.dualSignal) {
+                    listOf(true to R.string.dual_signal_title)
+                } else {
+                    listOf(a.mobile to R.string.show_mobile_title)
+                },
             ) { index -> update { it.setSignalColumns(columns[index]) } }
         } else Unit
         ContentControl.Wifi -> WifiPositionControl(settings, ringSettings, update)
@@ -369,20 +386,35 @@ internal fun ContentControlRow(
             dependencies = emptyList(),
         ) { value -> update { it.setReplaceStatusIcon(value) } }
         ContentControl.Mobile -> Unit
-        ContentControl.DataSim -> ContentToggle(a.dataSimOnly, R.string.data_sim_only_title,
-            null, emptyList()) { value -> update { it.setDataSimOnly(value) } }
-        ContentControl.Stacked -> ContentToggle(
-            checked = a.stackedSignal,
-            title = R.string.stacked_signal_title,
-            summaryRes = R.string.stacked_signal_summary,
-            dependencies = listOf(a.signalOutOfRing to R.string.ring_position_mobile),
-        ) { value -> update { it.setStackedSignal(value) } }
-        ContentControl.MobileActivity -> if (a.signalOutOfRing) {
+        ContentControl.DataSim -> ContentToggle(
+            checked = a.dataSimOnly,
+            title = R.string.data_sim_only_title,
+            summaryRes = null,
+            dependencies = emptyList(),
+            enabled = !a.dualSignal,
+            hintRes = if (a.dualSignal) R.string.dual_signal_disables else null,
+        ) { value -> update { it.setDataSimOnly(value) } }
+        // 环外堆叠读数在双排信号接管后就不再绘制，这个开关会变成空档，直接藏起来。
+        ContentControl.Stacked -> if (!a.dualSignal) {
+            ContentToggle(
+                checked = a.stackedSignal,
+                title = R.string.stacked_signal_title,
+                summaryRes = R.string.stacked_signal_summary,
+                dependencies = listOf(a.signalOutOfRing to R.string.ring_position_mobile),
+            ) { value -> update { it.setStackedSignal(value) } }
+        } else Unit
+        // 双排信号开着时字形不画，环内/环外就无从谈起；而双排的箭头正是由这个开关决定，
+        // 所以此时必须照常显示，否则箭头永远开不起来。
+        ContentControl.MobileActivity -> if (a.dualSignal || a.signalOutOfRing) {
             ContentToggle(
                 checked = settings.showMobileActivity,
                 title = R.string.show_mobile_activity_title,
                 summaryRes = R.string.show_mobile_activity_summary,
-                dependencies = listOf(true to R.string.ring_position_mobile),
+                dependencies = if (a.dualSignal) {
+                    listOf(true to R.string.dual_signal_title)
+                } else {
+                    listOf(true to R.string.ring_position_mobile)
+                },
             ) { value -> update { it.setShowMobileActivity(value) } }
         } else Unit
         // 双排信号的开关已经移到「排布 → 合并风格」里，与圆环/胶囊并列且互斥，
@@ -394,18 +426,14 @@ internal fun ContentControlRow(
             summaryRes = R.string.dual_signal_label_summary,
             dependencies = listOf(settings.dualSignal to R.string.dual_signal_title),
         ) { value -> update { it.setDualSignalLabel(value) } }
-        ContentControl.DualSignalArrows -> ContentToggle(
-            checked = settings.dualSignalArrows,
-            title = R.string.dual_signal_arrows_title,
-            summaryRes = R.string.dual_signal_arrows_summary,
-            dependencies = listOf(settings.dualSignal to R.string.dual_signal_title),
-        ) { value -> update { it.setDualSignalArrows(value) } }
         ContentControl.Sim1 -> ContentToggle(
             checked = a.showSim1,
             title = R.string.show_sim_1_title,
             summaryRes = null,
             dependencies = listOf(a.mobile to R.string.show_mobile_title) +
                 (signalInsideRing(a) to R.string.ring_position_mobile),
+            enabled = !settings.dualSignal,
+            hintRes = if (settings.dualSignal) R.string.dual_signal_disables else null,
         ) { value -> update { it.setShowSim1(value) } }
         ContentControl.Sim2 -> ContentToggle(
             checked = a.showSim2,
@@ -413,6 +441,8 @@ internal fun ContentControlRow(
             summaryRes = null,
             dependencies = listOf(a.mobile to R.string.show_mobile_title) +
                 (signalInsideRing(a) to R.string.ring_position_mobile),
+            enabled = !settings.dualSignal,
+            hintRes = if (settings.dualSignal) R.string.dual_signal_disables else null,
         ) { value -> update { it.setShowSim2(value) } }
         ContentControl.Value -> ContentToggle(a.value, R.string.show_value_title, null, emptyList()) { value -> update { it.setShowValue(value) } }
         ContentControl.Percent -> ContentToggle(
@@ -519,6 +549,8 @@ internal fun ContentControlRow(
             title = R.string.hide_sim2_title,
             summaryRes = R.string.hide_sim2_summary,
             dependencies = listOf(settings.enabled to R.string.master_module_title),
+            enabled = !settings.dualSignal,
+            hintRes = if (settings.dualSignal) R.string.dual_signal_disables else null,
         ) { value -> update { it.setHideSim2(value) } }
         ContentControl.HideNetType -> ContentToggle(
             checked = settings.hideNetType,
@@ -618,7 +650,9 @@ internal fun ContentControlRow(
                 ContentChoice(
                     settings.stackStyle, R.string.stack_style_title, null,
                     listOf(R.string.stack_style_dots, R.string.stack_style_rows),
-                    listOf(a.stackedOut() to R.string.stacked_signal_title),
+                    listOf(
+                        (a.dualSignal || a.stackedOut()) to R.string.stacked_signal_title
+                    ),
                 ) { value -> update { it.setStackStyle(value) } }
             }
         ContentControl.TempChargingOnly -> ContentToggle(
@@ -730,6 +764,12 @@ internal fun ContentControlRow(
             summaryRes = R.string.panel_native_icons_summary,
             dependencies = master + listOf(a.slotted to R.string.trio_style_title),
         ) { value -> update { it.setPanelNativeIcons(value) } }
+        ContentControl.Magicos10Invert -> ContentToggle(
+            checked = settings.magicos10Invert,
+            title = R.string.magicos10_invert_title,
+            summaryRes = R.string.magicos10_invert_summary,
+            dependencies = master + listOf(a.slotted to R.string.trio_style_title),
+        ) { value -> update { it.setMagicos10Invert(value) } }
         // The row behaviours apply to the status bar itself, so they follow the module's
         // own master switch rather than the glyph's.
         ContentControl.CompactRow -> ContentToggle(
@@ -750,6 +790,18 @@ internal fun ContentControlRow(
             summaryRes = R.string.capsule_no_scale_summary,
             dependencies = listOf(settings.enabled to R.string.master_module_title),
         ) { value -> update { it.setCapsuleNoScale(value) } }
+        // 生效范围管的是整个模块（含双排信号），所以依赖模块总开关而不是字形开关。
+        ContentControl.EffectiveScope -> ContentMultiChoice(
+            selected = scopeActiveSet(settings.effectiveScope),
+            title = R.string.effective_scope_title,
+            options = listOf(
+                R.string.scope_option_cc,
+                R.string.scope_option_shade,
+                R.string.scope_option_keyguard,
+            ),
+            dependencies = listOf(settings.enabled to R.string.master_module_title),
+            minimumSelected = 1,
+        ) { next -> update { it.setEffectiveScope(scopeMaskOf(next)) } }
     }
 }
 
@@ -767,12 +819,14 @@ private fun SignalPositionControl(
     update: ((SettingsRepository) -> Unit) -> Unit,
 ) {
     val outside = settings.signalMode == Prefs.SIGNAL_OUT_RING
+    // 双排信号接管后三合一不再绘制信号，环内/环外没有意义：保留可见但不可点，切回来还能直接改。
     ContentChoice(
         selected = if (outside) 1 else 0,
         title = R.string.ring_position_mobile,
-        summaryRes = null,
+        summaryRes = if (settings.dualSignal) R.string.dual_signal_disables else null,
         options = listOf(R.string.signal_mode_in_ring, R.string.signal_mode_out_ring),
         dependencies = listOf(settings.enabled to R.string.master_title),
+        enabled = !settings.dualSignal,
         onChange = { value ->
             update { it.setSignalMode(if (value == 1) Prefs.SIGNAL_OUT_RING else Prefs.SIGNAL_IN_RING) }
         },
@@ -961,6 +1015,7 @@ private fun RingPositionControl(
         TrioZones.Part.RUNNING -> R.string.ring_position_running
         TrioZones.Part.FPS -> R.string.ring_position_fps
         TrioZones.Part.TRAFFIC -> R.string.ring_position_traffic
+        TrioZones.Part.BT_BATTERY -> R.string.ring_position_bt_battery
     }
     ContentChoice(selected, title,
         null,
@@ -993,13 +1048,19 @@ private fun ContentToggle(
     summaryRes: Int?,
     dependencies: List<Pair<Boolean, Int>>,
     enabled: Boolean = true,
+    hintRes: Int? = null,
     onChange: (Boolean) -> Unit,
 ) {
     ContentGate(dependencies) {
+        // 说明行 + 置灰原因：Miuix 只给一行摘要，所以拼成一句话，而不是丢掉原说明。
+        val summary = listOfNotNull(
+            summaryRes?.let { stringResource(it) },
+            hintRes?.let { stringResource(it) },
+        ).joinToString(" ")
         SwitchPreference(
             checked = checked,
             title = stringResource(title),
-            summary = summaryRes?.let { stringResource(it) },
+            summary = summary.ifEmpty { null },
             insideMargin = SettingsItemMargin,
             enabled = enabled,
             onCheckedChange = onChange,
@@ -1061,6 +1122,66 @@ private fun ContentChoice(
                 enabled = enabled && dependencies.all { it.first },
             )
         }
+    }
+}
+
+/**
+ * 生效范围的三项，按选项下标表示：0 控制中心、1 通知面板、2 锁屏界面。
+ *
+ * 存的是排除位，所以某一位没置才是「这一处生效」。
+ */
+private fun scopeActiveSet(mask: Int): Set<Int> = buildSet {
+    if ((mask and Prefs.SCOPE_BIT_CC) == 0) add(0)
+    if ((mask and Prefs.SCOPE_BIT_SHADE) == 0) add(1)
+    if ((mask and Prefs.SCOPE_BIT_KEYGUARD) == 0) add(2)
+}
+
+/** [scopeActiveSet] 的反向：把勾选集合写回排除位掩码。 */
+private fun scopeMaskOf(active: Set<Int>): Int {
+    var mask = 0
+    if (0 !in active) mask = mask or Prefs.SCOPE_BIT_CC
+    if (1 !in active) mask = mask or Prefs.SCOPE_BIT_SHADE
+    if (2 !in active) mask = mask or Prefs.SCOPE_BIT_KEYGUARD
+    return mask
+}
+
+/**
+ * 多选下拉行，用 [GlassMultiDropdownPreference]（每项左侧勾选框）。
+ *
+ * @param minimumSelected 至少保留几项勾选。生效范围是唯一设它的调用方：全不勾意味着
+ *   模块哪都不显示，那不是能选的地方，读起来像出错而不是一个选择。所以最后一项点不掉，
+ *   这一行永远说明一个范围。
+ */
+@Composable
+private fun ContentMultiChoice(
+    selected: Set<Int>,
+    title: Int,
+    options: List<Int>,
+    dependencies: List<Pair<Boolean, Int>>,
+    minimumSelected: Int = 0,
+    onChange: (Set<Int>) -> Unit,
+) {
+    ContentGate(dependencies) {
+        val labels = options.map { stringResource(it) }
+        val summary = if (selected.size >= options.size) {
+            stringResource(R.string.scope_all)
+        } else {
+            options.indices.filter { it in selected }
+                .joinToString(stringResource(R.string.scope_list_separator)) { labels[it] }
+        }
+        GlassMultiDropdownPreference(
+            title = stringResource(title),
+            options = labels,
+            selectedIndices = selected,
+            onToggleIndex = { index ->
+                val next = selected.toMutableSet()
+                if (!next.remove(index)) next.add(index)
+                if (next.size >= minimumSelected) onChange(next)
+            },
+            summary = summary,
+            insideMargin = SettingsItemMargin,
+            enabled = dependencies.all { it.first },
+        )
     }
 }
 

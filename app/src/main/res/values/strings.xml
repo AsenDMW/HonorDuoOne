@@ -61,12 +61,17 @@
     <string name="stacked_signal_title">堆叠信号</string>
     <string name="stacked_signal_summary">环外信号画成模块自己的两排点；关闭则交还 MagicOS 的原生信号格。</string>
     <string name="dual_signal_title">双排信号</string>
-    <string name="dual_signal_summary">原生信号格替换为自绘双排（上排主卡方柱、下排副卡圆点）。与状态栏三合一互斥：三合一接管信号时本功能自动让位。</string>
+    <string name="dual_signal_disables">双排信号开启时不可用：此时三合一不绘制信号。</string>
+    <string name="dual_signal_summary">原生信号格替换为 Duo 外置信号观感的双排（上排主卡胶囊柱、下排副卡圆点）。柱数沿用「4柱/5柱」、行样式沿用「堆叠风格」、上下行箭头跟随「显示流量活动图标」，制式标用「双排制式标」。与圆环/胶囊互斥：开启本项会自动关闭三合一字形。</string>
     <string name="glyph_dual_exclusive">圆环/胶囊与双排信号互斥：开启其中一个会自动关闭另一个。</string>
     <string name="dual_signal_label_title">双排制式标</string>
     <string name="dual_signal_label_summary">在双排信号旁显示网络制式（5G / 4G 等）；原生制式标随被隐藏的信号组一同消失，由此补回。</string>
-    <string name="dual_signal_arrows_title">双排流量箭头</string>
-    <string name="dual_signal_arrows_summary">在双排信号旁显示上下行箭头，左半移动数据、右半 Wi-Fi；未连接的一侧显示为灰色。</string>
+    <string name="effective_scope_title">模块生效范围</string>
+    <string name="scope_option_cc">控制中心</string>
+    <string name="scope_option_shade">通知面板</string>
+    <string name="scope_option_keyguard">锁屏界面</string>
+    <string name="scope_all">所有位置</string>
+    <string name="scope_list_separator">、</string>
     <string name="stack_label_title">网络类型样式</string>
     <string name="stack_label_left">单独显示</string>
     <string name="stack_label_above">信号上方</string>
@@ -126,6 +131,8 @@
     <string name="drawing_hint_top">上部</string>
     <string name="drawing_hint_centre">中部</string>
     <string name="drawing_hint_bottom">下部</string>
+    <string name="drawing_hint_left">左侧</string>
+    <string name="drawing_hint_right">右侧</string>
     <string name="drawing_state_title">预览状态</string>
     <string name="drawing_scene_normal">正常</string>
     <string name="drawing_scene_charging">充电</string>
@@ -168,7 +175,11 @@
     <string name="anti_burn_in_summary">周期性微幅位移，保护 OLED 屏幕防残影</string>
     <string name="show_wifi_title">显示 Wi-Fi 弧</string>
     <string name="show_traffic_title">流量箭头</string>
+    <string name="show_bt_battery_title">蓝牙电量</string>
+    <string name="show_bt_battery_summary">正方环代表已连接蓝牙耳机的电量，环内是电量数字；可放在任意格子。</string>
+    <string name="bt_battery_place_hint">正方环本身没有别的可调项：位置在「排布」页把它拖到想要的格子。</string>
     <string name="ring_position_traffic">流量箭头的位置</string>
+    <string name="ring_position_bt_battery">蓝牙电量的位置</string>
     <string name="show_traffic_summary">左侧一对是移动数据的上下行，右侧一对是 Wi-Fi 的；没连接的那一侧显示为灰色。</string>
     <string name="show_wifi_summary">最外层绘制 Wi-Fi 弧，弧数跟随信号强度。</string>
 
@@ -499,4 +510,15 @@
     <string name="capsule_no_scale_summary">灵动胶囊驻留时阻止状态栏随之缩小，并以系统回弹动画复原。</string>
     <string name="panel_native_icons_title">展开面板显示原生图标</string>
     <string name="panel_native_icons_summary">下拉展开通知栏或控制中心时交还系统原生 Wi-Fi/信号/电池图标，收起恢复三合一；与下拉形变互斥，形变优先。</string>
+    <string name="magicos10_invert_title">MagicOS 10 反色兼容</string>
+    <string name="magicos10_invert_summary">部分 MagicOS 10 设备状态栏对系统图标做反色处理。开启后字形颜色跟随反色，与原生图标保持一致。</string>
+    <string name="group_backup">备份与恢复</string>
+    <string name="backup_export_title">导出备份</string>
+    <string name="backup_export_summary">将全部设置导出为 JSON 文件，可保存到本地或云端。</string>
+    <string name="backup_import_title">导入备份</string>
+    <string name="backup_import_summary">从 JSON 文件恢复设置，覆盖当前所有配置。</string>
+    <string name="backup_exported">设置已导出</string>
+    <string name="backup_export_failed">导出失败</string>
+    <string name="backup_imported">已导入 %1$d 项设置</string>
+    <string name="backup_import_failed">导入失败：文件格式错误</string>
 </resources>

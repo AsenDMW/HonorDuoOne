@@ -157,9 +157,43 @@ object Prefs {
     const val KEY_DUAL_SIGNAL_LABEL = "dual_signal_label"
     const val DEF_DUAL_SIGNAL_LABEL = false
 
-    /** 双排信号柱状图右侧的流量箭头组件（左移动数据、右 Wi-Fi）；关掉则不画不占位。 */
-    const val KEY_DUAL_SIGNAL_ARROWS = "dual_signal_arrows"
-    const val DEF_DUAL_SIGNAL_ARROWS = true
+    /**
+     * 模块生效范围：在哪些位置把状态栏交还宿主。
+     *
+     * 存的是 **排除位** 而不是包含位：0 表示三处都生效，置某一位表示该处不生效。
+     * 键名与位值和上游 HonorDuo 1.0.5 保持一致，备份文件才能互通；读取一律经过
+     * [normalizeScope]，因为「三处全排除」等于模块哪都不画，归一成 0（都生效）。
+     */
+    const val KEY_EFFECTIVE_SCOPE = "effective_scope"
+
+    /** 三处都生效。 */
+    const val SCOPE_ALL = 0
+
+    /** 控制中心里不生效。 */
+    const val SCOPE_BIT_CC = 1
+
+    /** 通知面板里不生效。 */
+    const val SCOPE_BIT_SHADE = 2
+
+    /** 锁屏界面上不生效。 */
+    const val SCOPE_BIT_KEYGUARD = 4
+
+    const val DEF_EFFECTIVE_SCOPE = SCOPE_ALL
+
+    /**
+     * 把存下来的掩码归一成有效的排除位。
+     *
+     * 三项全被排除意味着模块没有任何位置可以绘制，那不是用户能选出来的状态，
+     * 读到一个只会是脏数据（或上游清空选择后的写法），按「都生效」处理。
+     */
+    fun normalizeScope(mask: Int): Int {
+        val exclusions = mask and (SCOPE_BIT_CC or SCOPE_BIT_SHADE or SCOPE_BIT_KEYGUARD)
+        return if (exclusions == (SCOPE_BIT_CC or SCOPE_BIT_SHADE or SCOPE_BIT_KEYGUARD)) {
+            SCOPE_ALL
+        } else {
+            exclusions
+        }
+    }
 
     /**
      * Size of the Wi-Fi arcs, as a percentage of the size the arrangement fits them to.
@@ -312,15 +346,28 @@ object Prefs {
      */
     const val PART_TRAFFIC = 13
 
+    /**
+     * 蓝牙耳机电量组件：正方环（圆角矩形描边）代表电量，环内是电量数字。
+     *
+     * 与 [KEY_TRIO_BT_BATTERY] 控制的「替换卡一点阵」不同，这是一个可独立放置的组件，
+     * 电量未知时整格不画（不画空环占位）。
+     */
+    const val PART_BT_BATTERY = 14
+
     /** The highest valid part id. */
-    const val PART_MAX = PART_TRAFFIC
+    const val PART_MAX = PART_BT_BATTERY
 
     /**
      * How many zones the layout has, in the order the layout string stores them:
-     * top, middle, bottom. Append-only: reordering would reinterpret every stored
-     * layout.
+     * top, middle, bottom, left, right. Append-only: reordering would reinterpret
+     * every stored layout, and the three-zone strings written by older builds stay
+     * readable because [decodeLayout] reads them section by section - the missing
+     * two sections are simply empty.
      */
-    const val ZONE_COUNT = 3
+    const val ZONE_COUNT = 5
+
+    /** The top band. */
+    const val ZONE_TOP = 0
 
     /** The middle band, in the order [ZONE_COUNT] stores them. */
     const val ZONE_CENTRE = 1
@@ -328,20 +375,38 @@ object Prefs {
     /** The bottom band, in the same order. */
     const val ZONE_BOTTOM = 2
 
+    /** The left flank: the mouth the ring cuts at 9 o'clock. */
+    const val ZONE_LEFT = 3
+
+    /** The right flank: the mouth the ring cuts at 3 o'clock. */
+    const val ZONE_RIGHT = 4
+
     /**
-     * Whether the ring's zone `zone` may hold part `id`.
+     * Whether the arrangement in force may hold part `id` in zone `zone`.
      *
-     * One placement is refused, and only one: a signal row may not sit in the
-     * ring's middle band. The ring's outline is already cut at 12 and 6 o'clock, and
-     * those two openings are where a row of level beads belongs; the middle has no
-     * opening, so the same beads there are a short horizontal smudge across a closed
-     * ring.
+     * One placement is still refused everywhere: a signal row may not sit in the
+     * middle band, because a row there would be drawn across the readings.
      *
-     * Applies to the ring only: the capsule draws its rows across its two openings
-     * and the rectangle has no middle band.
+     * The flanks take every piece on the ring - a bead row inside its own mouth, the
+     * Wi-Fi arcs outside the stroke, and a reading, the clock or the bolt in the cell
+     * the outline is cut for it. The capsule's flanks are its two round ends, which
+     * only know how to lay beads and draw the arcs, so the other pieces are refused
+     * there rather than silently drawing nothing.
      */
     @JvmStatic
-    fun zoneAccepts(zone: Int, id: Int): Boolean = !(zone == ZONE_CENTRE && isSignalRow(id))
+    fun zoneAccepts(zone: Int, id: Int, style: Int): Boolean {
+        if (zone == ZONE_CENTRE && isSignalRow(id)) return false
+        if (style == STYLE_CAPSULE && (zone == ZONE_LEFT || zone == ZONE_RIGHT) &&
+            !isSignalRow(id) && id != PART_WIFI
+        ) {
+            return false
+        }
+        return true
+    }
+
+    /** The ring arrangement's rule; see [zoneAccepts] with three arguments. */
+    @JvmStatic
+    fun zoneAccepts(zone: Int, id: Int): Boolean = zoneAccepts(zone, id, STYLE_RING)
 
     /** Whether `id` is a row of level dots: the aggregate meter or either card's row. */
     @JvmStatic
@@ -1043,6 +1108,14 @@ object Prefs {
      */
     const val KEY_PANEL_NATIVE_ICONS = "panel_native_icons"
     const val DEF_PANEL_NATIVE_ICONS = false
+
+    /**
+     * MagicOS 10 反色兼容：部分 MagicOS 10 设备在状态栏对系统图标做反色处理，
+     * 导致自绘字形颜色与原生图标相反。开启后对采样到的前景色做反色补偿，
+     * 使字形与原生图标颜色一致。默认关。
+     */
+    const val KEY_MAGICOS10_INVERT = "magicos10_invert"
+    const val DEF_MAGICOS10_INVERT = false
 
     /** Clamps a stored morph row gap to the supported span. */
     @JvmStatic

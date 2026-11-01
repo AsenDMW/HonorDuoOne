@@ -68,8 +68,30 @@ object TrioRenderer {
     /** 蓝牙电量正方环用的可复用对象。 */
     private val RING_RECT = RectF()
     private val BT_RING_PATH = Path()
-    private val BT_SEG_PATH = Path()
     private val BT_PATH_MEASURE = PathMeasure()
+
+    /**
+     * 蓝牙正方环的一份预烘焙几何：进度段 Path（以环心为原点）、字号与基线偏移。
+     *
+     * 下拉反色动画会逐帧重画字形，但每帧变的只有颜色与组件位置——电量、尺寸、
+     * 字重、字体都不变。把 PathMeasure 截段和文字测量按（尺寸/电量/画法/字重/
+     * 字体世代）缓存起来，逐帧路径就只剩 drawRoundRect + drawPath + drawText。
+     */
+    private class BtRingGeometry(
+        @JvmField val half: Float,
+        @JvmField val radius: Float,
+        @JvmField val stroke: Float,
+        @JvmField val seg: Path?,
+        @JvmField val text: String?,
+        @JvmField val textSize: Float,
+        @JvmField val baselineDelta: Float,
+    )
+
+    /** 几何缓存：键不含颜色与位置。实际在用的尺寸只有一两种，电量 0..100 封顶。 */
+    private val BT_RING_GEOMETRY = object : LinkedHashMap<Long, BtRingGeometry>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, BtRingGeometry>?): Boolean =
+            size > 128
+    }
     /**
      * The bolt path's own width.
      *
@@ -294,7 +316,11 @@ object TrioRenderer {
      * the row guaranteed to be styled by the ROM.
      */
     fun adoptSystemTypeface(face: Typeface?) {
-        if (face != null) TEXT_BASE = face
+        if (face != null && face != TEXT_BASE) {
+            TEXT_BASE = face
+            // 基字变了，按它量出的一切都作废：字重缓存与蓝牙环几何缓存随世代号失效。
+            sFontGeneration++
+        }
     }
 
     init {
@@ -583,13 +609,6 @@ object TrioRenderer {
                             c.drawCircle(x, y, dotR, FILL)
                         }
                     } else {
-                        val bt = TrioState.sBtBatteryLevel
-                        if (part == Prefs.PART_SIM_1 && a.trioBtBattery > 0 && bt in 0..100 &&
-                            (!a.dataSimOnly || TrioState.sDataSlot == 0)
-                        ) {
-                            // The earbud battery stands in for SIM 1's dot row.
-                            drawBtBattery(c, bt, fg, a, TrioGeometry.ZONE_CY[z])
-                        } else {
                         val rowLevel = if (a.dataSimOnly) dataLevel else when (part) {
                             Prefs.PART_SIM_1 -> sim1Level
                             Prefs.PART_SIM_2 -> sim2Level
@@ -610,9 +629,10 @@ object TrioRenderer {
                             FILL.color = if (dot < active) fg else inactive
                             c.drawCircle(x, y, dotR, FILL)
                         }
-                        }
                     }
-                } else if (part == Prefs.PART_BT_BATTERY && TrioState.sBtBatteryLevel in 0..100) {
+                } else if (part == Prefs.PART_BT_BATTERY && TrioState.sBtBatteryLevel in 0..100 &&
+                    (a.trioBtBattery and Prefs.TRIO_BT_MASK) != 0
+                ) {
                     // 蓝牙电量正方环组件：环内是电量数字，环的描边长度按电量走。
                     val slotCentre = TrioGeometry.zoneTextCy(z, a.ringStroke) -
                         TrioGeometry.ZONE_CY[z]
@@ -1586,15 +1606,8 @@ object TrioRenderer {
         val dotR = if (columns == 5) TrioGeometry.CAP_DOT_R * 0.85f else TrioGeometry.CAP_DOT_R
         FILL.style = Paint.Style.FILL
 
-        val bt = TrioState.sBtBatteryLevel
-        // The earbud battery stands in for the top (SIM 1) row.
         val stackedTop = stackedDualIn(a, TrioZones.Zone.TOP, slotLevels)
         val stackedBottom = stackedDualIn(a, TrioZones.Zone.BOTTOM, slotLevels)
-        val btTop = topRow && !stackedTop && a.trioBtBattery > 0 && bt in 0..100 &&
-            (!a.dataSimOnly || TrioState.sDataSlot == 0)
-        if (btTop) {
-            drawCapsuleBt(c, bt, fg, a, TrioGeometry.capDotCx(left, right), topY, right)
-        }
         // 两排信号点：同一开口里同时放了卡1与卡2（或「信号」且开了双卡），上下各一排，
         // 与圆环环内排序的下部两排同一效果。
         // 每张卡用自己那一格的读数；取不到时才退回图标给出的总信号。
@@ -1659,7 +1672,7 @@ object TrioRenderer {
                 if (part == Prefs.PART_SIM_2 && !TrioState.slotPresent(1)) continue
                 for (i in 0 until columns) {
                     val x = first + i * pitch
-                    if (isTop && !btTop) {
+                    if (isTop) {
                         FILL.color = if (i < topActive) fg else inactive
                         c.drawCircle(x, y, dotR, FILL)
                     }
@@ -2530,81 +2543,10 @@ object TrioRenderer {
     }
 
     /**
-     * The Bluetooth earbud battery in the ring's SIM 1 slot, replacing the dot
-     * row: a small arc concentric with the battery ring (mode 1) or a plain
-     * number (mode 2). [zoneCy] is the slot's centre, so the arc can be centred
-     * on the ring; drawn in the slot's local (centred) coordinates.
-     */
-    private fun drawBtBattery(c: Canvas, bt: Int, fg: Int, a: TrioAppearance, zoneCy: Float) {
-        if (a.trioBtBattery == 2) {
-            val text = bt.toString()
-            applyWeight(a.typeWeight)
-            val size = fitSize(text, 24f, 40f)
-            TEXT.color = fg
-            TEXT.textAlign = Paint.Align.CENTER
-            TEXT.textSize = size
-            c.drawText(text, 0f, inkCentredBaseline(text, size, 0f), TEXT)
-            return
-        }
-        val rCy = TrioGeometry.B_CY - zoneCy
-        STROKE.style = Paint.Style.STROKE
-        STROKE.strokeWidth = 10f
-        STROKE.color = withAlpha(fg, a.trackAlpha)
-        ARC.set(-BT_R, rCy - BT_R, BT_R, rCy + BT_R)
-        c.drawArc(ARC, BT_ARC_START, BT_ARC_SWEEP, false, STROKE)
-        if (bt > 0) {
-            val progress = BT_ARC_SWEEP * bt / 100f
-            STROKE.color = fg
-            c.drawArc(ARC, BT_ARC_START + BT_ARC_SWEEP - progress, progress, false, STROKE)
-        }
-    }
-
-    /**
-     * The Bluetooth earbud battery in the capsule's top opening, replacing the
-     * SIM 1 dot row: a number (mode 2) or an arc hugging the row's span (mode 1).
-     */
-    private fun drawCapsuleBt(
-        c: Canvas, bt: Int, fg: Int, a: TrioAppearance,
-        cx: Float, cy: Float, right: Float,
-    ) {
-        val stroke = a.ringStroke * TrioGeometry.CAP_STROKE_RATIO
-        if (a.trioBtBattery == 2) {
-            val text = bt.toString()
-            applyWeight(a.typeWeight)
-            val size = fitSize(
-                text, TrioGeometry.capOpeningTextEm(stroke) * 0.75f,
-                TrioGeometry.capOpeningWidth(right) * 0.6f,
-            )
-            TEXT.color = fg
-            TEXT.textAlign = Paint.Align.CENTER
-            TEXT.textSize = size
-            c.drawText(text, cx, inkCentredBaseline(text, size, cy), TEXT)
-            return
-        }
-        val columns = a.signalColumns.coerceIn(4, 5)
-        val pitch = if (columns == 5) {
-            TrioGeometry.CAP_DOT_PITCH * 0.82f
-        } else {
-            TrioGeometry.CAP_DOT_PITCH
-        }
-        val r = (columns - 1) * pitch * 0.5f + TrioGeometry.CAP_DOT_R * 2.5f
-        STROKE.style = Paint.Style.STROKE
-        STROKE.strokeWidth = TrioGeometry.CAP_DOT_R * 1.6f
-        STROKE.color = withAlpha(fg, a.trackAlpha)
-        ARC.set(cx - r, cy - r, cx + r, cy + r)
-        c.drawArc(ARC, BT_ARC_START, BT_ARC_SWEEP, false, STROKE)
-        if (bt > 0) {
-            val progress = BT_ARC_SWEEP * bt / 100f
-            STROKE.color = fg
-            c.drawArc(ARC, BT_ARC_START + BT_ARC_SWEEP - progress, progress, false, STROKE)
-        }
-    }
-
-    /**
      * 蓝牙电量正方环组件：圆角矩形描边作为电量环，环内是电量数字。
      *
-     * 环的描边分两层：底层是半透明轨道（整圈），上层是按电量比例填充的前景色。
-     * 数字用与读数一致的字重，居中放在环内。电量未知时调用方已拦截，这里只处理 0..100。
+     * 内容由 [Prefs.KEY_TRIO_BT_BATTERY] 的位掩码选择：勾「弧线」画按电量比例填充的
+     * 前景段，勾「数字」在环内画电量，两者可同时勾选。电量未知时调用方已拦截，这里只处理 0..100。
      */
     private fun drawBtBatterySquareRing(
         c: Canvas, bt: Int, fg: Int, a: TrioAppearance,
@@ -2614,46 +2556,82 @@ object TrioRenderer {
         // 正方环边长取格子宽高的较小者，留 1 单位描边余量。
         val limit = if (heightHint > 0f) minOf(width, heightHint) else width
         val size = limit.coerceAtMost(40f).coerceAtLeast(16f)
-        val stroke = (size * 0.14f).coerceAtLeast(1.5f)
-        val half = size * 0.5f
+        val g = btRingGeometry(size, bt, (a.trioBtBattery and Prefs.TRIO_BT_MASK), a.valueWeight)
         val cx = when (align) {
-            CellAlign.LEFT -> anchorX + half
-            CellAlign.RIGHT -> anchorX - half
+            CellAlign.LEFT -> anchorX + g.half
+            CellAlign.RIGHT -> anchorX - g.half
             CellAlign.CENTRE -> anchorX
         }
-        val radius = size * 0.28f
         STROKE.style = Paint.Style.STROKE
-        STROKE.strokeWidth = stroke
+        STROKE.strokeWidth = g.stroke
         STROKE.strokeCap = Paint.Cap.ROUND
         // 底层轨道：整圈圆角矩形，半透明。
         STROKE.color = withAlpha(fg, a.trackAlpha)
-        RING_RECT.set(cx - half, cy - half, cx + half, cy + half)
-        c.drawRoundRect(RING_RECT, radius, radius, STROKE)
-        // 上层进度：按电量比例画圆角矩形的一段。
-        if (bt > 0) {
-            val path = BT_RING_PATH
-            path.reset()
-            path.addRoundRect(cx - half, cy - half, cx + half, cy + half, radius, radius, Path.Direction.CW)
-            // 用 PathMeasure 取前 bt% 的长度，画出前景进度段。
-            val pm = BT_PATH_MEASURE
-            pm.setPath(path, false)
-            val total = pm.length
-            if (total > 0f) {
-                val segLen = total * bt / 100f
-                val seg = BT_SEG_PATH
-                pm.getSegment(0f, segLen, seg, true)
-                STROKE.color = fg
-                c.drawPath(seg, STROKE)
+        RING_RECT.set(cx - g.half, cy - g.half, cx + g.half, cy + g.half)
+        c.drawRoundRect(RING_RECT, g.radius, g.radius, STROKE)
+        // 上层进度：缓存在以环心为原点的坐标系里，平移到本帧位置重放。
+        val seg = g.seg
+        if (seg != null) {
+            STROKE.color = fg
+            c.withTranslation(cx, cy) {
+                drawPath(seg, STROKE)
             }
         }
-        // 环内电量数字。
-        val text = bt.toString()
-        applyWeight(a.valueWeight)
-        val numSize = fitSize(text, size * 0.42f, size - stroke * 2f - 2f)
-        TEXT.color = fg
-        TEXT.textAlign = Paint.Align.CENTER
-        TEXT.textSize = numSize
-        c.drawText(text, cx, inkCentredBaseline(text, numSize, cy), TEXT)
+        // 环内电量数字；未勾「数字」时缓存里就是 null。
+        val text = g.text
+        if (text != null) {
+            applyWeight(a.valueWeight)
+            TEXT.color = fg
+            TEXT.textAlign = Paint.Align.CENTER
+            TEXT.textSize = g.textSize
+            c.drawText(text, cx, cy + g.baselineDelta, TEXT)
+        }
+    }
+
+    /**
+     * 蓝牙正方环的几何，按（尺寸/电量/画法位/字重/字体世代）取缓存，未命中才构建。
+     *
+     * 尺寸按 1/8 设计单位分桶：格子宽在高精度抖动下也不会每帧换键。构建一次要跑
+     * PathMeasure 摊平截段、字号拟合和墨盒测量，这些正是反色动画里逐帧要省掉的东西。
+     */
+    private fun btRingGeometry(size: Float, bt: Int, btFlags: Int, weight: Int): BtRingGeometry {
+        val key = ((size * 8f).roundToInt().toLong() shl 32) or
+            ((bt.toLong() and 0x7F) shl 24) or
+            ((btFlags.toLong() and 0x3) shl 22) or
+            ((weight.toLong() and 0x3FF) shl 12) or
+            (sFontGeneration.toLong() and 0xFFF)
+        BT_RING_GEOMETRY[key]?.let { return it }
+        val stroke = (size * 0.14f).coerceAtLeast(1.5f)
+        val half = size * 0.5f
+        val radius = size * 0.28f
+        // 进度段：把整圈圆角矩形摊平后按电量比例截取；未勾「弧线」时只留轨道。
+        var seg: Path? = null
+        if ((btFlags and Prefs.TRIO_BT_ARC) != 0 && bt > 0) {
+            BT_RING_PATH.reset()
+            BT_RING_PATH.addRoundRect(-half, -half, half, half, radius, radius, Path.Direction.CW)
+            val pm = BT_PATH_MEASURE
+            pm.setPath(BT_RING_PATH, false)
+            val total = pm.length
+            if (total > 0f) {
+                val s = Path()
+                pm.getSegment(0f, total * bt / 100f, s, true)
+                seg = s
+            }
+        }
+        var text: String? = null
+        var textSize = 0f
+        var baselineDelta = 0f
+        if ((btFlags and Prefs.TRIO_BT_NUMBER) != 0) {
+            val t = bt.toString()
+            applyWeight(weight)
+            textSize = fitSize(t, size * 0.42f, size - stroke * 2f - 2f)
+            // 相对环心的基线偏移，绘制时加回本帧的 cy。
+            baselineDelta = inkCentredBaseline(t, textSize, 0f)
+            text = t
+        }
+        val g = BtRingGeometry(half, radius, stroke, seg, text, textSize, baselineDelta)
+        BT_RING_GEOMETRY[key] = g
+        return g
     }
 
     // ---------- Pull-down morph (ported from HonorDuoOne's TrioFeature.drawMorph) ----------
@@ -2957,21 +2935,6 @@ object TrioRenderer {
 
             // ---- The signal slot: the dots stretch into the row's bars ----
             if (sigOn) {
-                val bt = TrioState.sBtBatteryLevel
-                val btReplaces = a.trioBtBattery > 0 && bt in 0..100 &&
-                    (!a.dataSimOnly || TrioState.sDataSlot == 0)
-                if (btReplaces) {
-                    // The BT reading is one piece, so it travels as one piece.
-                    val anchor = pieceAnchor(Prefs.PART_SIM_1, 2)
-                    val bx = lerp(anchor[0], barsCx, t)
-                    val by = lerp(anchor[1], 60f, t)
-                    canvas.withSave {
-                        canvas.translate(bx, by)
-                        // drawBtBattery centres its arc at (0, B_CY - zoneCy): handing
-                        // it B_CY centres the arc on the translation.
-                        drawBtBattery(canvas, bt, fg, a, TrioGeometry.B_CY)
-                    }
-                } else {
                     val columns = a.signalColumns.coerceIn(4, 5)
                     val dotR = (if (columns == 5) 4.2f else 4.9f) * a.dotScaleFactor()
                     val halfDiv = (columns - 1) * 0.5f
@@ -3038,7 +3001,6 @@ object TrioRenderer {
                         ARC.set(cxI - wI * 0.5f, bottomI - bh, cxI + wI * 0.5f, bottomI)
                         canvas.drawRoundRect(ARC, rx, rx, FILL)
                     }
-                }
             }
         }
     }
@@ -3603,15 +3565,6 @@ object TrioRenderer {
     /** 整块墨高，用于把组件收进很矮的上下开口。 */
     private const val TRAFFIC_INK_H = 2f * (TRAFFIC_PAIR_DY + ARROW_H)
     private val ARROW = Path()
-
-    /**
-     * The Bluetooth earbud battery, drawn in place of the SIM 1 dot row: an arc
-     * concentric with the battery ring (or the capsule's top opening), spanning
-     * 65..115 deg, the reach the dot row had.
-     */
-    private const val BT_R = 48f
-    private const val BT_ARC_START = 65f
-    private const val BT_ARC_SWEEP = 50f
 
     /**
      * The pull-down morph's expanded row, in the 120-high morph design space:

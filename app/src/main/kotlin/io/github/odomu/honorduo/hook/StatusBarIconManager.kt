@@ -16,6 +16,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewParent
 import androidx.core.view.isGone
+import io.github.odomu.honorduo.model.Prefs
 import io.github.odomu.honorduo.model.TrioAppearance
 import io.github.odomu.honorduo.model.TrioConfig
 import io.github.odomu.honorduo.model.TrioState
@@ -193,12 +194,13 @@ internal object StatusBarIconManager {
     }
 
     /**
-     * 蓝牙电量是否正在被字形融合：开关打开、电量已知，且面板未展开（展开时
-     * 用户要原生图标）。电量未知（断开/未连接）时原生自己已经按连接态重绘，
-     * 这里不介入，避免把已关闭的蓝牙图标误点亮。
+     * 蓝牙电量是否正在被字形融合：排布页放下了正方环组件、勾了至少一种画法、电量
+     * 已知，且面板未展开（展开时用户要原生图标）。电量未知（断开/未连接）时原生
+     * 自己已经按连接态重绘，这里不介入，避免把已关闭的蓝牙图标误点亮。
      */
     private fun bluetoothMerged(a: TrioAppearance): Boolean =
-        a.trioBtBattery > 0 && TrioState.sBtBatteryLevel in 0..100 && !TrioState.sPanelExpanded
+        a.placed(Prefs.PART_BT_BATTERY) && (a.trioBtBattery and Prefs.TRIO_BT_MASK) != 0 &&
+            TrioState.sBtBatteryLevel in 0..100 && !TrioState.sPanelExpanded
 
     /**
      * Hands [view] back with the visibility it had before this module touched it.

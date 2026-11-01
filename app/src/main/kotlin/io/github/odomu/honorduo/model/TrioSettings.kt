@@ -705,10 +705,9 @@ class TrioSettings {
                 Prefs.KEY_MOBILE_TRAFFIC_ARROWS, Prefs.DEF_MOBILE_TRAFFIC_ARROWS
             )
             s.trioChargeBreath = p.getBoolean(Prefs.KEY_TRIO_CHARGE_BREATH, Prefs.DEF_TRIO_CHARGE_BREATH)
-            s.trioBtBattery = Prefs.clamp(
-                p.getInt(Prefs.KEY_TRIO_BT_BATTERY, Prefs.DEF_TRIO_BT_BATTERY),
-                0, Prefs.MAX_TRIO_BT_BATTERY,
-            )
+            s.trioBtBattery = p.getInt(
+                Prefs.KEY_TRIO_BT_BATTERY, Prefs.DEF_TRIO_BT_BATTERY,
+            ).let { if (it == 0) Prefs.DEF_TRIO_BT_BATTERY else it.coerceIn(1, Prefs.MAX_TRIO_BT_BATTERY) }
             s.trioCompactRow = p.getBoolean(Prefs.KEY_TRIO_COMPACT_ROW, Prefs.DEF_TRIO_COMPACT_ROW)
             s.trioKeepIcons = p.getBoolean(Prefs.KEY_TRIO_KEEP_ICONS, Prefs.DEF_TRIO_KEEP_ICONS)
             s.capsuleNoScale = p.getBoolean(Prefs.KEY_CAPSULE_NO_SCALE, Prefs.DEF_CAPSULE_NO_SCALE)
@@ -1048,10 +1047,9 @@ class TrioSettings {
                 Prefs.KEY_MOBILE_TRAFFIC_ARROWS, Prefs.DEF_MOBILE_TRAFFIC_ARROWS
             )
             s.trioChargeBreath = bundle.getBoolean(Prefs.KEY_TRIO_CHARGE_BREATH, Prefs.DEF_TRIO_CHARGE_BREATH)
-            s.trioBtBattery = Prefs.clamp(
-                bundle.getInt(Prefs.KEY_TRIO_BT_BATTERY, Prefs.DEF_TRIO_BT_BATTERY),
-                0, Prefs.MAX_TRIO_BT_BATTERY,
-            )
+            s.trioBtBattery = bundle.getInt(
+                Prefs.KEY_TRIO_BT_BATTERY, Prefs.DEF_TRIO_BT_BATTERY,
+            ).let { if (it == 0) Prefs.DEF_TRIO_BT_BATTERY else it.coerceIn(1, Prefs.MAX_TRIO_BT_BATTERY) }
             s.trioCompactRow = bundle.getBoolean(Prefs.KEY_TRIO_COMPACT_ROW, Prefs.DEF_TRIO_COMPACT_ROW)
             s.trioKeepIcons = bundle.getBoolean(Prefs.KEY_TRIO_KEEP_ICONS, Prefs.DEF_TRIO_KEEP_ICONS)
             s.capsuleNoScale = bundle.getBoolean(Prefs.KEY_CAPSULE_NO_SCALE, Prefs.DEF_CAPSULE_NO_SCALE)

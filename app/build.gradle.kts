@@ -28,13 +28,15 @@ android {
         minSdk = 29
         //noinspection TargetSdkVersionUpdate
         targetSdk = 37
-        // 1.1.0（150）：正式发布版。同步 Duo 1.0.6 — 新增隐藏隐私指示开关；修复横屏下拉
-        // 时钟缩成一点（maxHeight=0 时不缩放字号）；行重新布局后自动补回时钟；hookVisibility
-        // 用 VISIBILITY_FLAGS 掩码减少无谓遍历；修复蓝牙电量组件显示时下拉卡顿
-        // （applyIconVisibility 仅在未知↔已知翻转时调用）；恢复备份时补推时钟偏移/行距/
-        // 农历/日期星期格式/颜色与生效范围等漏推键（仍按本模块设计需重启 SystemUI 后生效）。
-        versionCode = tagVersionCode ?: 150
-        versionName = tagVersionName ?: "1.1.0"
+        // 1.1.5（158）：蓝牙电量正方环几何预烘焙——进度段 Path、字号、基线按
+        // （尺寸/电量/画法/字重/字体世代）缓存，下拉反色动画逐帧只换颜色重放，
+        // 不再每帧 PathMeasure 截段与文字测量；adoptSystemTypeface 换基字时递增
+        // 字体世代号，一并修掉字重缓存不随基字失效的旧隐患。
+        // 1.1.4（157）：移植 HonorDuo 1.0.7 的 af95135（农历分配跳过、FontMetrics 复用）
+        // 与 7489aa8（时钟恢复加固：detached 检测、live 守卫、重试防死循环、stepBarClock
+        // 自愈、横屏 transient 亮屏补放恢复）。
+        versionCode = tagVersionCode ?: 158
+        versionName = tagVersionName ?: "1.1.5"
 
         buildConfigField("String", "REPO_SLUG", "\"$repoSlug\"")
     }

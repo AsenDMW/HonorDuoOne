@@ -972,6 +972,18 @@ internal object StatusBarRowManager {
         }
     }
 
+    /**
+     * 只让字形重画，不动状态值、不碰时钟排版。
+     *
+     * 给蓝牙电量这类单格读数用：字形 onDraw 自己会读 TrioState，[invalidateAll]
+     * 里的 `state.refresh()` 和时钟 sync（含 requestLayout）没必要跟着每格跳一次。
+     */
+    fun invalidateGlyphs() {
+        for (row in snapshot()) {
+            row.glyph?.invalidate()
+        }
+    }
+
     fun invalidateAll() {
         for (row in snapshot()) {
             row.state.refresh()

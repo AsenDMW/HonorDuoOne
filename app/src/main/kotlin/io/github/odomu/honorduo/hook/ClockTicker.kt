@@ -91,6 +91,14 @@ internal object ClockTicker {
         }
     }
 
+    /** 农历月/日名表：常量表，不随每次 formatLunar 重新分配。 */
+    private val LUNAR_MONTHS = arrayOf("正月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "冬月", "腊月")
+    private val LUNAR_DAYS = arrayOf(
+        "初一", "初二", "初三", "初四", "初五", "初六", "初七", "初八", "初九", "初十",
+        "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十",
+        "廿一", "廿二", "廿三", "廿四", "廿五", "廿六", "廿七", "廿八", "廿九", "三十"
+    )
+
     fun formatLunar(now: java.util.Date): String {
         return try {
             val cal = android.icu.util.ChineseCalendar()
@@ -98,14 +106,8 @@ internal object ClockTicker {
             val month = cal.get(android.icu.util.ChineseCalendar.MONTH)
             val day = cal.get(android.icu.util.ChineseCalendar.DAY_OF_MONTH)
             val isLeap = cal.get(android.icu.util.ChineseCalendar.IS_LEAP_MONTH) == 1
-            val months = arrayOf("正月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "冬月", "腊月")
-            val days = arrayOf(
-                "初一", "初二", "初三", "初四", "初五", "初六", "初七", "初八", "初九", "初十",
-                "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十",
-                "廿一", "廿二", "廿三", "廿四", "廿五", "廿六", "廿七", "廿八", "廿九", "三十"
-            )
-            val m = if (month in months.indices) months[month] else "${month + 1}月"
-            val d = if (day in 1..30) days[day - 1] else "${day}日"
+            val m = if (month in LUNAR_MONTHS.indices) LUNAR_MONTHS[month] else "${month + 1}月"
+            val d = if (day in 1..30) LUNAR_DAYS[day - 1] else "${day}日"
             (if (isLeap) "闰" else "") + m + d
         } catch (_: Throwable) {
             ""
@@ -114,7 +116,8 @@ internal object ClockTicker {
 
     /**
      * `[time, date, weekday, lunar]` for the module's bar clock; an entry is empty when it was
-     * not asked for.
+     * not asked for. Lunar is skipped entirely when off: the ChineseCalendar plus its two
+     * name tables are a per-tick allocation nobody reads (HonorDuo af95135 同款修复）。
      */
     @JvmStatic
     fun barTexts(
@@ -122,13 +125,14 @@ internal object ClockTicker {
         weekday: Boolean,
         dateFormatType: Int = Prefs.DEF_CLOCK_DATE_FORMAT,
         weekdayFormatType: Int = Prefs.DEF_CLOCK_WEEKDAY_FORMAT,
+        lunar: Boolean = true,
     ): Array<String> {
         val now = Calendar.getInstance().time
         return arrayOf(
             format(now),
             if (date) formatDate(now, dateFormatType) else "",
             if (weekday) formatWeekday(now, weekdayFormatType) else "",
-            formatLunar(now),
+            if (lunar) formatLunar(now) else "",
         )
     }
 

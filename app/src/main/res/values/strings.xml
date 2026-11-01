@@ -176,8 +176,8 @@
     <string name="show_wifi_title">显示 Wi-Fi 弧</string>
     <string name="show_traffic_title">流量箭头</string>
     <string name="show_bt_battery_title">蓝牙电量</string>
-    <string name="show_bt_battery_summary">正方环代表已连接蓝牙耳机的电量，环内是电量数字；可放在任意格子。</string>
-    <string name="bt_battery_place_hint">正方环本身没有别的可调项：位置在「排布」页把它拖到想要的格子。</string>
+    <string name="show_bt_battery_summary">正方环代表已连接蓝牙耳机的电量，可放在任意格子；显示弧线还是数字在卡片里勾选。</string>
+    <string name="bt_battery_place_hint">位置在「排布」页把它拖到想要的格子；显示内容在上面的选项里勾选。</string>
     <string name="ring_position_traffic">流量箭头的位置</string>
     <string name="ring_position_bt_battery">蓝牙电量的位置</string>
     <string name="show_traffic_summary">左侧一对是移动数据的上下行，右侧一对是 Wi-Fi 的；没连接的那一侧显示为灰色。</string>
@@ -497,10 +497,9 @@
     <!-- Charge fill breathing while the charger is attached. -->
     <string name="trio_charge_breath_title">充电呼吸</string>
     <string name="trio_charge_breath_summary">充电时电量填充在当前电量与 +6% 之间缓慢呼吸，闪电随之缩放。</string>
-    <!-- Bluetooth earbud battery in place of the SIM 1 dots. -->
-    <string name="trio_bt_battery_title">蓝牙耳机电量</string>
-    <string name="trio_bt_battery_summary">在卡 1 信号点位置显示已连接蓝牙耳机的电量。</string>
-    <string name="trio_bt_battery_off">关闭</string>
+    <!-- What the Bluetooth battery square ring shows. -->
+    <string name="trio_bt_battery_title">显示内容</string>
+    <string name="trio_bt_battery_summary">正方环上显示的内容，可同时勾选弧线与数字。</string>
     <string name="trio_bt_battery_arc">弧线</string>
     <string name="trio_bt_battery_number">数字</string>
     <!-- Status-bar row behaviour. -->

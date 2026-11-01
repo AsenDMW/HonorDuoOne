@@ -124,8 +124,8 @@
     <string name="show_wifi_title">Wi-Fi arcs</string>
     <string name="show_traffic_title">Traffic arrows</string>
     <string name="show_bt_battery_title">Bluetooth battery</string>
-    <string name="show_bt_battery_summary">A square ring showing the connected Bluetooth earbud battery level, with the number inside; placeable in any cell.</string>
-    <string name="bt_battery_place_hint">The square ring has nothing else to tune: drag it into the cell you want on the Layout page.</string>
+    <string name="show_bt_battery_summary">A square ring showing the connected Bluetooth earbud battery level; placeable in any cell, and what it shows (arc and/or number) is picked in the card.</string>
+    <string name="bt_battery_place_hint">Drag it into the cell you want on the Layout page; pick what it shows with the options above.</string>
     <string name="ring_position_traffic">Traffic arrows position</string>
     <string name="ring_position_bt_battery">Bluetooth battery position</string>
     <string name="show_traffic_summary">The left pair is mobile data up/down, the right pair is Wi-Fi; a side that is not connected is drawn grey.</string>
@@ -499,10 +499,9 @@
     <!-- Charge fill breathing while the charger is attached. -->
     <string name="trio_charge_breath_title">Charging breath</string>
     <string name="trio_charge_breath_summary">While charging, the fill wanders between the level and +6% and the bolt shrinks with it.</string>
-    <!-- Bluetooth earbud battery in place of the SIM 1 dots. -->
-    <string name="trio_bt_battery_title">Bluetooth earbud battery</string>
-    <string name="trio_bt_battery_summary">Shows the connected earbuds\' battery where the SIM 1 dots sit.</string>
-    <string name="trio_bt_battery_off">Off</string>
+    <!-- What the Bluetooth battery square ring shows. -->
+    <string name="trio_bt_battery_title">Display</string>
+    <string name="trio_bt_battery_summary">What the square ring shows; arc and number can both be selected.</string>
     <string name="trio_bt_battery_arc">Arc</string>
     <string name="trio_bt_battery_number">Number</string>
     <!-- Status-bar row behaviour. -->

@@ -1,7 +1,11 @@
 package io.github.odomu.honorduo.hook
 
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.widget.TextView
 import io.github.libxposed.api.XposedModule
 import io.github.odomu.honorduo.model.Prefs
@@ -27,6 +31,32 @@ internal object SystemBarHook {
     /** Only visibility-related setFlags writes need the suppression pass. */
     private const val VISIBILITY_FLAGS = 0x0000000C
 
+    /** CommandQueue 回调实现类（HonorDuo 7489aa8 同款hook点）。 */
+    private const val TRANSIENT_CALLBACK =
+        "com.android.systemui.statusbar.data.repository.StatusBarModePerDisplayRepositoryImpl\$commandQueueCallback\$1"
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var transientDisplayId = -1
+
+    /**
+     * 横屏轻扫会把状态栏短暂亮出来（CommandQueue.showTransient），不走面板展开路径，
+     * 时钟恢复不到——dispatch 之后补放一次恢复。只保留 displayId 基本类型，
+     * 不持有 View、不注册重复定时器。
+     */
+    private val restoreTransientClock = Runnable {
+        val a = TrioConfig.appearance()
+        if (a.enabled) {
+            val contents = StatusBarIconManager.contentsViewGroup
+            if (contents?.display?.displayId == transientDisplayId) {
+                val clock = contents.findViewById<View>(StatusBarIconManager.clockId) as? TextView
+                if (clock != null) {
+                    BarClockManager.noteNativeClock(clock)
+                    BarClockManager.sync(a)
+                }
+            }
+        }
+    }
+
     private class PrivacyChipState(view: View) {
         val view = WeakReference(view)
         var hiddenVisibility: Int? = null
@@ -49,6 +79,7 @@ internal object SystemBarHook {
         hooked += hookClockFace(module, cl)
         hooked += hookTint(module, cl)
         hooked += hookPrivacyChip(module, cl)
+        hooked += hookTransientStatusBar(module, cl)
         return hooked
     }
 
@@ -290,7 +321,7 @@ internal object SystemBarHook {
             if (refreshMethod != null) {
                 hooked += TrioHooks.hook(module, refreshMethod, "honorduo-contents-tint") { chain ->
                     val result = chain.proceed()
-                    TrioHooks.invalidateHosts()
+                    TrioHooks.invalidateForTint()
                     result
                 }
             }
@@ -304,7 +335,7 @@ internal object SystemBarHook {
             if (method != null) {
                 hooked += TrioHooks.hook(module, method, "honorduo-tint") { chain ->
                     val result = chain.proceed()
-                    TrioHooks.invalidateHosts()
+                    TrioHooks.invalidateForTint()
                     result
                 }
             }
@@ -390,6 +421,32 @@ internal object SystemBarHook {
             val previous = state.hiddenVisibility ?: return
             state.hiddenVisibility = null
             if (chip.visibility == View.GONE) chip.visibility = previous
+        }
+    }
+
+    /**
+     * 横屏轻扫（CommandQueue.showTransient）会把状态栏短暂亮出来而不展开面板，
+     * 这条路径到不了时钟恢复逻辑，角落会一直空着。在 repository dispatch 之后
+     * 补放一次恢复。（移植自 HonorDuo 7489aa8）
+     */
+    private fun hookTransientStatusBar(module: XposedModule, cl: ClassLoader): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return 0
+        val callback = Refl.cls(TRANSIENT_CALLBACK, cl) ?: return 0
+        val displayField = Refl.field(callback, "\$thisDisplayId") ?: return 0
+        val showTransient = TrioHooks.methodNamed(callback, "showTransient", 3) ?: return 0
+        return TrioHooks.hook(module, showTransient, "honorduo-transient-status-bar") { chain ->
+            val result = chain.proceed()
+            val displayId = (chain.getArg(0) as? Number)?.toInt()
+            val types = (chain.getArg(1) as? Number)?.toInt() ?: 0
+            val targetDisplay = (Refl.get(displayField, chain.thisObject) as? Number)?.toInt()
+            if (displayId != null && displayId == targetDisplay &&
+                (types and WindowInsets.Type.statusBars()) != 0
+            ) {
+                transientDisplayId = displayId
+                mainHandler.removeCallbacks(restoreTransientClock)
+                mainHandler.post(restoreTransientClock)
+            }
+            result
         }
     }
 }

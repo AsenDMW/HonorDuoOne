@@ -136,8 +136,29 @@ internal object BarClockManager {
         } catch (_: Throwable) {}
     }
 
+    /**
+     * 反色变化只换墨水色：不解算排版、不 requestLayout。
+     *
+     * 下拉过程 refreshTint 逐帧回调，若走 [sync] → apply() 里 ink 变化会逐帧
+     * solve + requestLayout 时钟及其父容器，下拉被整条状态栏的逐帧重排拖卡。
+     */
+    fun refreshInk() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            Handler(Looper.getMainLooper()).post { refreshInk() }
+            return
+        }
+        sBarClockView?.refreshInk()
+    }
+
     private fun syncNow(a: TrioAppearance) {
         var native = sBarClock?.get()
+        // Detached trees retain their internal parent links. Attachment, not a non-null
+        // parent, decides whether this clock can still host a visible replacement.
+        // (HonorDuo 7489aa8)
+        if (native != null && !native.isAttachedToWindow) {
+            sBarClock = null
+            native = null
+        }
         if (native == null) {
             val contents = StatusBarIconManager.contentsViewGroup
             val clockId = StatusBarIconManager.clockId
@@ -148,8 +169,12 @@ internal object BarClockManager {
                 }
             }
         }
-        if (!a.enabled || StatusBarRowManager.suppressed || native == null || a.barClockHidden ||
-            (a.glyph && a.hidesStatusClock()) || !a.drawsBarClock()
+        // A view we already put in the bar is evidence enough: the lookup above can fail
+        // for a frame while the host swaps trees, and dropping the clock then was how a
+        // rotation or a pull-down left the corner empty for good. (HonorDuo 7489aa8)
+        val live = sBarClockView?.takeIf { it.parent != null && it.isAttachedToWindow }
+        if (!a.enabled || StatusBarRowManager.suppressed || (native == null && live == null) ||
+            a.barClockHidden || (a.glyph && a.hidesStatusClock()) || !a.drawsBarClock()
         ) {
             removeBarClock()
             // Releasing would undo the user's own "hide the bar clock" switch, which is
@@ -157,9 +182,13 @@ internal object BarClockManager {
             if (!a.barClockHidden) native?.let { StatusBarIconManager.release(it) }
             return
         }
+        if (native == null) return
         val view = ensureBarClock(native)
         if (view == null) {
-            if (sBarClockView == null && !sBarClockPending) {
+            // Only a clock that exists but is not laid out yet is worth retrying. A
+            // parentless one is re-resolved by the next row layout (see [requestOnLayout]);
+            // posting a retry for it resent the same failing pass forever on the main thread.
+            if (sBarClockView == null && !sBarClockPending && native.parent != null) {
                 sBarClockPending = true
                 native.post {
                     sBarClockPending = false
@@ -284,11 +313,12 @@ internal object BarClockManager {
     private fun updateBarClock(view: BarClockView, a: TrioAppearance, native: TextView) {
         val texts = ClockTicker.barTexts(
             a.clockDate, a.clockWeekday, a.clockDateFormat, a.clockWeekdayFormat,
+            lunar = a.clockLunar,
         )
         val time = texts[0]
         val date = texts[1]
         val weekday = texts[2]
-        val lunar = if (a.clockLunar) texts[3] else ""
+        val lunar = texts[3]
         view.bindInk(native)
         val userScale = a.clockSize / Prefs.DEF_CLOCK_SIZE.toFloat()
         val baseSize = native.textSize * userScale
@@ -333,9 +363,13 @@ internal object BarClockManager {
         val a = TrioConfig.appearance()
         val native = sBarClock?.get()
         if (!a.enabled || StatusBarRowManager.suppressed || native == null ||
-            (a.glyph && a.hidesStatusClock()) || !a.drawsBarClock()
+            !native.isAttachedToWindow || (a.glyph && a.hidesStatusClock()) || !a.drawsBarClock()
         ) {
-            removeBarClock()
+            // `native.parent == null` is not "nothing to draw": it is the host having
+            // replaced the clock under us. Resolving again is what puts a clock back;
+            // dropping the view here was the second half of the missing-clock bug.
+            // (HonorDuo 7489aa8)
+            if (native == null || !native.isAttachedToWindow) sync(a) else removeBarClock()
             return
         }
         try {
@@ -391,6 +425,9 @@ internal object BarClockManager {
     private class BarClockView(context: Context) : View(context) {
 
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        /** Scratch font-metrics holder: `paint.fontMetrics` allocates a new object per read. */
+        private val FONT_METRICS = Paint.FontMetrics()
 
         /** Scratch for tight text bounds; drawing runs on the main thread only. */
         private val bounds = Rect()
@@ -673,8 +710,14 @@ internal object BarClockManager {
         private fun lineHeight(size: Float): Float {
             if (size <= 0f) return 0f
             paint.textSize = size
-            val metrics = paint.fontMetrics
-            return (metrics.descent - metrics.ascent) * BAR_CLOCK_LINE_SPACING
+            paint.getFontMetrics(FONT_METRICS)
+            return (FONT_METRICS.descent - FONT_METRICS.ascent) * BAR_CLOCK_LINE_SPACING
+        }
+
+        /** Fills [FONT_METRICS] and returns the ascent — avoids `paint.fontMetrics` allocating per call. */
+        private fun fontAscent(): Float {
+            paint.getFontMetrics(FONT_METRICS)
+            return FONT_METRICS.ascent
         }
 
         private fun gap(size: Float): Float = size * BAR_CLOCK_GAP
@@ -761,7 +804,7 @@ internal object BarClockManager {
                     val wkW = if (weekday.isEmpty()) 0f else paint.measureText(weekday)
                     val wtW = weatherWidth(topSize)
                     var x = innerLeft + (innerW - rowWidth(floatArrayOf(dtW, wkW, wtW), wordStep)) / 2f + topOffsetX
-                    val baseline = rowTop - paint.fontMetrics.ascent
+                    val baseline = rowTop - fontAscent()
                     if (date.isNotEmpty()) {
                         paint.color = dtDrawColor
                         canvas.drawText(date, x, baseline, paint)
@@ -779,7 +822,7 @@ internal object BarClockManager {
                     paint.textSize = lineSize
                     val wtW = weatherWidth(lineSize)
                     var x = innerLeft + (innerW - rowWidth(floatArrayOf(tmW, wtW), step)) / 2f + topOffsetX
-                    val baseline = rowTop - paint.fontMetrics.ascent
+                    val baseline = rowTop - fontAscent()
                     // Centre the caption on the digits' ink, not on the font box: the
                     // box reserves descender space the digits never use, so centring on
                     // it left the caption sitting low under the time.
@@ -812,7 +855,7 @@ internal object BarClockManager {
                     paint.textSize = timeSize
                     val tmW = paint.measureText(time)
                     var x = innerLeft + (innerW - rowWidth(floatArrayOf(lnW, tmW), step)) / 2f + bottomOffsetX
-                    val timeBaseline = rowTop - paint.fontMetrics.ascent
+                    val timeBaseline = rowTop - fontAscent()
                     if (lunar.isNotEmpty()) {
                         // Centre on each string's own ink: CJK glyphs reach below the
                         // baseline further than digits, so a digit-box centre left the
@@ -846,7 +889,7 @@ internal object BarClockManager {
                         rowW += wkW
                     }
                     var x = innerLeft + (innerW - rowW) / 2f + bottomOffsetX
-                    val baseline = rowTop - paint.fontMetrics.ascent
+                    val baseline = rowTop - fontAscent()
                     if (date.isNotEmpty()) {
                         paint.color = dtDrawColor
                         canvas.drawText(date, x, baseline, paint)

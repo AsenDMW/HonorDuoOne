@@ -137,6 +137,38 @@ internal object TrioHooks {
         BarClockManager.sync(TrioConfig.appearance())
     }
 
+    /**
+     * 只重画字形，不碰时钟：蓝牙电量这类「只有一格在变」的读数走这里。
+     *
+     * [invalidateHosts] 会顺手 [BarClockManager.sync]，而 sync 每次都会重算时钟排版并
+     * 对时钟和它的父容器 requestLayout —— 一旦电量每几秒跳一格（TWS 左右耳+仓各自
+     * 上报），整条状态栏就被反复重排，下拉明显掉帧。字形自己在 onDraw 里重读
+     * TrioState，单独 invalidate 就够了。
+     */
+    fun invalidateGlyphs() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            Handler(Looper.getMainLooper()).post { invalidateGlyphs() }
+            return
+        }
+        StatusBarRowManager.invalidateGlyphs()
+    }
+
+    /**
+     * 反色变化走这里：重画行内视图 + 时钟换墨水色，但不跑时钟解算/排版。
+     *
+     * 下拉过程 refreshTint / onDarkChanged 逐帧回调；若走 [invalidateHosts]，
+     * [BarClockManager.sync] 会因墨水色变化逐帧 solve + requestLayout 时钟和它的
+     * 父容器，整条状态栏跟着逐帧重排——下拉必卡。颜色不影响排版，只换色重画。
+     */
+    fun invalidateForTint() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            Handler(Looper.getMainLooper()).post { invalidateForTint() }
+            return
+        }
+        StatusBarRowManager.invalidateAll()
+        BarClockManager.refreshInk()
+    }
+
     fun hook(
         module: XposedModule,
         m: Method?,

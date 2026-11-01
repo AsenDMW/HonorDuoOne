@@ -162,10 +162,10 @@ internal class TrioState(val host: View) {
         wifiLevel = sWifiLevel
         wifiLevel5 = sWifiLevel5
         wifiStandard = sWifiStandard
-        // 弧线/数字（开关控制）和排布页的正方环（放下即用）都要这个电量，两者任一
-        // 生效就得交给渲染层，否则只放正方环时格子永远是空的。
+        // 只有排布页放下正方环组件、且勾了至少一种画法（弧线/数字）时才需要这个电量。
         val btUsed = TrioConfig.get().let { s ->
-            s.trioBtBattery > 0 || s.ringZones.any { it.contains(Prefs.PART_BT_BATTERY) }
+            s.ringZones.any { it.contains(Prefs.PART_BT_BATTERY) } &&
+                (s.trioBtBattery and Prefs.TRIO_BT_MASK) != 0
         }
         btBatteryLevel = if (btUsed) sBtBatteryLevel else -1
         wifiTrafficUp = sWifiTrafficUp

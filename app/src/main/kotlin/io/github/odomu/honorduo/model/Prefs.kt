@@ -358,8 +358,8 @@ object Prefs {
     /**
      * 蓝牙耳机电量组件：正方环（圆角矩形描边）代表电量，环内是电量数字。
      *
-     * 与 [KEY_TRIO_BT_BATTERY] 控制的「替换卡一点阵」不同，这是一个可独立放置的组件，
-     * 电量未知时整格不画（不画空环占位）。
+     * 可独立放置；环上画弧线还是环内画数字（或两者）由 [KEY_TRIO_BT_BATTERY] 的位掩码
+     * 决定。电量未知时整格不画（不画空环占位）。
      */
     const val PART_BT_BATTERY = 14
 
@@ -1079,14 +1079,18 @@ object Prefs {
     const val DEF_TRIO_CHARGE_BREATH = true
 
     /**
-     * Bluetooth earbud battery in the glyph, three states: 0 off, 1 an arc, 2 a number.
+     * 蓝牙电量组件的显示内容，位掩码：[TRIO_BT_ARC] 弧线、[TRIO_BT_NUMBER] 数字，可叠加。
      *
-     * An int rather than a boolean so an existing boolean store reads back as "off"
-     * through the framework's failed cast instead of crashing the hooked process.
+     * 早先这是 0/1/2 三态（关闭/弧线/数字），控制「替换卡 1 点阵」；该画法已移除，
+     * 同一键改为描述可放置的正方环组件本身。读取时把旧的 0 归一为 [DEF_TRIO_BT_BATTERY]
+     * （旧 0 时正方环本来就画两者），升级后组件外观不变。
      */
     const val KEY_TRIO_BT_BATTERY = "trio_bt_battery"
-    const val DEF_TRIO_BT_BATTERY = 0
-    const val MAX_TRIO_BT_BATTERY = 2
+    const val DEF_TRIO_BT_BATTERY = 3
+    const val MAX_TRIO_BT_BATTERY = 3
+    const val TRIO_BT_ARC = 1
+    const val TRIO_BT_NUMBER = 2
+    const val TRIO_BT_MASK = TRIO_BT_ARC or TRIO_BT_NUMBER
 
     /**
      * Compact icon row: HwSystemIcons.initIconWidth returns the real content width

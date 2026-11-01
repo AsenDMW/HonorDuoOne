@@ -739,17 +739,16 @@ internal fun ContentControlRow(
             summaryRes = R.string.trio_charge_breath_summary,
             dependencies = master,
         ) { value -> update { it.setTrioChargeBreath(value) } }
-        ContentControl.BtBattery -> ContentChoice(
-            selected = settings.trioBtBattery.coerceIn(0, Prefs.MAX_TRIO_BT_BATTERY),
+        ContentControl.BtBattery -> ContentMultiChoice(
+            selected = btBatteryActiveSet(settings.trioBtBattery),
             title = R.string.trio_bt_battery_title,
-            summaryRes = R.string.trio_bt_battery_summary,
             options = listOf(
-                R.string.trio_bt_battery_off,
                 R.string.trio_bt_battery_arc,
                 R.string.trio_bt_battery_number,
             ),
             dependencies = master,
-        ) { index -> update { it.setTrioBtBattery(index) } }
+            minimumSelected = 1,
+        ) { next -> update { it.setTrioBtBattery(btBatteryMaskOf(next)) } }
         // The morph and the panel hand-off only exist for the slotted arrangements: the
         // rectangle has no ring or capsule to unfold from.
         ContentControl.TrioMorph -> ContentToggle(
@@ -1151,6 +1150,20 @@ private fun scopeMaskOf(active: Set<Int>): Int {
     if (0 !in active) mask = mask or Prefs.SCOPE_BIT_CC
     if (1 !in active) mask = mask or Prefs.SCOPE_BIT_SHADE
     if (2 !in active) mask = mask or Prefs.SCOPE_BIT_KEYGUARD
+    return mask
+}
+
+/** 蓝牙电量组件的显示位掩码转勾选集合（0 = 弧线，1 = 数字）。 */
+private fun btBatteryActiveSet(mask: Int): Set<Int> = buildSet {
+    if (mask and Prefs.TRIO_BT_ARC != 0) add(0)
+    if (mask and Prefs.TRIO_BT_NUMBER != 0) add(1)
+}
+
+/** [btBatteryActiveSet] 的反向：把勾选集合写回位掩码。 */
+private fun btBatteryMaskOf(active: Set<Int>): Int {
+    var mask = 0
+    if (0 in active) mask = mask or Prefs.TRIO_BT_ARC
+    if (1 in active) mask = mask or Prefs.TRIO_BT_NUMBER
     return mask
 }
 

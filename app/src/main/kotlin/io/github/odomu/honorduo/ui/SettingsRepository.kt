@@ -474,9 +474,9 @@ class SettingsRepository(context: Context) {
     /** Charge fill breathing - see [Prefs.KEY_TRIO_CHARGE_BREATH]. */
     fun setTrioChargeBreath(value: Boolean) = writeBoolean(Prefs.KEY_TRIO_CHARGE_BREATH, value)
 
-    /** Bluetooth earbud battery: 0 off, 1 arc, 2 number - see [Prefs.KEY_TRIO_BT_BATTERY]. */
+    /** 蓝牙电量组件显示内容位掩码：1 弧线、2 数字，可叠加 - see [Prefs.KEY_TRIO_BT_BATTERY]. */
     fun setTrioBtBattery(value: Int) =
-        writeInt(Prefs.KEY_TRIO_BT_BATTERY, value.coerceIn(0, Prefs.MAX_TRIO_BT_BATTERY))
+        writeInt(Prefs.KEY_TRIO_BT_BATTERY, value.coerceIn(1, Prefs.MAX_TRIO_BT_BATTERY))
 
     /** Compact icon row - see [Prefs.KEY_TRIO_COMPACT_ROW]. */
     fun setTrioCompactRow(value: Boolean) = writeBoolean(Prefs.KEY_TRIO_COMPACT_ROW, value)

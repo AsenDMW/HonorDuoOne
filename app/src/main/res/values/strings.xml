@@ -168,6 +168,7 @@
     <string name="harmony_stacked_title">鸿蒙堆叠信号</string>
     <string name="harmony_stacked_summary_off">开启后本模块自带功能整体停用，信号图标改由本模块内置的鸿蒙堆叠资源绘制；各开关状态保留，关闭本项即恢复（需重启系统界面）</string>
     <string name="harmony_stacked_summary_on">本模块自带功能已整体停用，信号图标由内置的鸿蒙堆叠资源绘制；关闭本项按原有开关状态恢复（需重启系统界面）</string>
+    <string name="harmony_stacked_source">堆叠信号资源与判定逻辑来自 StackedSignal_5G 原帖（酷安），点此查看</string>
     <string name="harmony_stacked_confirm_title">停用本模块？</string>
     <string name="harmony_stacked_confirm_summary">开启后本模块自带功能全部停用：状态栏字形（电量、信号、蓝牙电量）、时钟、性能与帧率、通知中心日期行天气等一律恢复原生显示；信号图标改由本模块内置的鸿蒙堆叠资源绘制（StackedSignal_5G 的图标与判定逻辑已 1:1 移植）。\n各开关的开启状态会保留，关闭本项即按原状态恢复。\n修改需重启系统界面后生效。</string>
     <string name="harmony_stacked_confirm_action">停用</string>
@@ -441,6 +442,13 @@
     <string name="about_update_summary">更新不频繁，只有周末有空处理；也可以自己拿源码让 AI 改。新版本发布在 Releases 里。</string>
     <string name="about_trae_title">TRAE 邀请链接</string>
     <string name="about_trae_summary">我在用 TRAE AI 编程工具，各类任务都能搞定。通过我的分享链接注册并登录桌面端，新用户一次性获得 3,000 积分。只有通过分享链接才有效。</string>
+
+    <string name="group_credits">致谢</string>
+    <string name="credit_honorhook_summary">液态玻璃界面样式与状态栏 Hook 思路的参考</string>
+    <string name="credit_honorduobar_summary">圆环形态、Wi-Fi 弧与双排信号的实现思路来源</string>
+    <string name="credit_honorduo_summary">三合一渲染引擎、分区模型与设置页底座</string>
+    <string name="credit_stacked_title">鸿蒙堆叠信号（酷安原帖）</string>
+    <string name="credit_stacked_summary">堆叠信号图标资源与判定逻辑的出处</string>
 
     <string name="info_module_version">应用版本</string>
     <string name="info_framework">Xposed 框架</string>

@@ -116,6 +116,7 @@
     <string name="harmony_stacked_title">HarmonyOS stacked signal</string>
     <string name="harmony_stacked_summary_off">Turning this on stops all built-in features and draws signal icons with the module\'s own ported HarmonyOS stacked resources. Your switch states are kept and come back when you turn this off (restart SystemUI).</string>
     <string name="harmony_stacked_summary_on">Built-in features are stopped; signal icons are drawn with the ported stacked resources. Turn this off to restore your previous switches (restart SystemUI).</string>
+    <string name="harmony_stacked_source">Stacked signal assets and logic come from the original StackedSignal_5G post on Coolapk. Tap to view</string>
     <string name="harmony_stacked_confirm_title">Disable this module?</string>
     <string name="harmony_stacked_confirm_summary">All built-in features stop: the status bar glyph (battery, signal, Bluetooth battery), clock, performance/FPS readings and the shade date-line weather all return to stock; signal icons are drawn with this module\'s own ported HarmonyOS stacked resources (StackedSignal_5G icons and logic ported 1:1).\nEvery switch keeps its state and is restored when you turn this off.\nA SystemUI restart is required.</string>
     <string name="harmony_stacked_confirm_action">Disable</string>
@@ -394,6 +395,13 @@
     <string name="about_update_summary">Updates are infrequent - only handled on weekends. You can also take the source and let an AI change it yourself. Releases live on GitHub.</string>
     <string name="about_trae_title">TRAE invite link</string>
     <string name="about_trae_summary">I use TRAE, an AI coding tool that handles all kinds of tasks. Sign up through my share link and log in on desktop to get 3,000 credits as a new user. Only the share link counts.</string>
+
+    <string name="group_credits">Acknowledgements</string>
+    <string name="credit_honorhook_summary">Reference for the liquid glass UI and status bar hook ideas</string>
+    <string name="credit_honorduobar_summary">Source of the ring shape, Wi-Fi arcs and dual-row signal ideas</string>
+    <string name="credit_honorduo_summary">Base for the trio renderer, zone model and settings page</string>
+    <string name="credit_stacked_title">HarmonyOS stacked signal (Coolapk post)</string>
+    <string name="credit_stacked_summary">Source of the stacked signal icon assets and drawing logic</string>
 
     <string name="info_module_version">App version</string>
     <string name="info_framework">Xposed framework</string>

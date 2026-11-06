@@ -11,15 +11,18 @@
 
 package io.github.odomu.honorduo.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.github.odomu.honorduo.R
@@ -30,6 +33,16 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/**
+ * 堆叠信号资源与判定逻辑的出处：原模块 StackedSignal_5G 的酷安帖子。
+ *
+ * 设置页这一行只负责把链接交给系统浏览器，不做内置浏览器或弹窗预览。
+ * 关于页致谢区块也用这个地址，所以不设私有可见性，避免两处各写一份。
+ */
+internal const val STACKED_SOURCE_URL =
+    "https://www.coolapk.com/feed/74608300?s=NTAxYmJmN2QyZDUxYzFnNmFlZGRjYmJ6a1662"
 
 /**
  * 鸿蒙堆叠信号互斥开关。
@@ -48,6 +61,7 @@ internal fun HarmonyStackedControl(
     update: ((SettingsRepository) -> Unit) -> Unit,
 ) {
     var confirming by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     SwitchPreference(
         checked = settings.harmonyStacked,
@@ -70,6 +84,17 @@ internal fun HarmonyStackedControl(
                 update { it.setHarmonyStacked(false) }
             }
         },
+    )
+
+    // 出处标注紧贴开关说明文字，字号与 tint 同 Miuix 的说明行；点击交给系统浏览器。
+    Text(
+        text = stringResource(R.string.harmony_stacked_source),
+        style = MiuixTheme.textStyles.footnote2,
+        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { openLink(context, STACKED_SOURCE_URL) }
+            .padding(horizontal = 18.dp, vertical = 8.dp),
     )
 
     OverlayDialog(

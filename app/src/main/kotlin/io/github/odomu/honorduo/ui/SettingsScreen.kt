@@ -1963,6 +1963,37 @@ private fun LazyListScope.aboutTab(
             }
         }
     }
+    // 致谢：排在关于页所有卡片之后，只列 README「致谢与来源」里已确认的三个仓库。
+    item { SectionTitle(stringResource(R.string.group_credits)) }
+    item {
+        Card {
+            val context = LocalContext.current
+            ArrowPreference(
+                title = "HonorHook",
+                summary = stringResource(R.string.credit_honorhook_summary),
+                insideMargin = SettingsItemMargin,
+                onClick = { openLink(context, HONORHOOK_URL) },
+            )
+            ArrowPreference(
+                title = "HonorDuoBar",
+                summary = stringResource(R.string.credit_honorduobar_summary),
+                insideMargin = SettingsItemMargin,
+                onClick = { openLink(context, HONOR_DUO_BAR_URL) },
+            )
+            ArrowPreference(
+                title = "HonorDuo",
+                summary = stringResource(R.string.credit_honorduo_summary),
+                insideMargin = SettingsItemMargin,
+                onClick = { openLink(context, HONOR_DUO_URL) },
+            )
+            ArrowPreference(
+                title = stringResource(R.string.credit_stacked_title),
+                summary = stringResource(R.string.credit_stacked_summary),
+                insideMargin = SettingsItemMargin,
+                onClick = { openLink(context, STACKED_SOURCE_URL) },
+            )
+        }
+    }
 }
 
 /**
@@ -2225,8 +2256,17 @@ private const val GITHUB_URL = "https://github.com/AsenDMW/HonorDuoOne"
 private const val TRAE_INVITE_URL =
     "https://www.trae.cn/events/code-fission/N89SVNJ5N6M3?utm_source=copy_link&utm_medium=code_fission"
 
+/**
+ * 关于页致谢区块的三个参考项目。
+ *
+ * 链接与 README「致谢与来源」一致，也逐一核对过仓库可访问；不要在这里放未确认的地址。
+ */
+private const val HONORHOOK_URL = "https://github.com/coderstory/HonorHook"
+private const val HONOR_DUO_BAR_URL = "https://github.com/nisu123f/HonorDuoBar"
+private const val HONOR_DUO_URL = "https://github.com/odomu/HonorDuo"
+
 /** 用系统浏览器打开一个链接；没有可用浏览器时静默忽略，不让关于页崩掉。 */
-private fun openLink(context: Context, url: String) {
+internal fun openLink(context: Context, url: String) {
     try {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     } catch (_: Throwable) {

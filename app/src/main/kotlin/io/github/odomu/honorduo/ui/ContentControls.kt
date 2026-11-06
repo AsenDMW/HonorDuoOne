@@ -12,15 +12,31 @@
 package io.github.odomu.honorduo.ui
 
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import io.github.odomu.honorduo.R
 import io.github.odomu.honorduo.model.Prefs
 import io.github.odomu.honorduo.model.TrioAppearance
 import io.github.odomu.honorduo.model.TrioSettings
 import io.github.odomu.honorduo.render.TrioZones
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.DropdownEntry
 import top.yukonga.miuix.kmp.basic.DropdownItem
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 
 /**
@@ -40,6 +56,11 @@ import top.yukonga.miuix.kmp.preference.SwitchPreference
  */
 internal enum class ContentControl(val owner: TrioSettingsPart) {
     Enabled(TrioSettingsPart.Appearance),
+    /**
+     * 鸿蒙堆叠信号互斥：落在排布页顶部的功能区，与总开关同排。
+     * 开启后本模块整体停用，把信号图标交还给系统与堆叠模块。
+     */
+    HarmonyStacked(TrioSettingsPart.Appearance),
     MergeIcons(TrioSettingsPart.Appearance),
     Style(TrioSettingsPart.Appearance),
     AntiBurnIn(TrioSettingsPart.Appearance),
@@ -213,7 +234,8 @@ internal fun contentControlsFor(part: TrioSettingsPart): List<ContentControl> =
     ContentControl.entries.filter {
         val matchesOwner = it.owner == part || (part == TrioSettingsPart.Battery && it == ContentControl.Bolt)
         matchesOwner && !(part == TrioSettingsPart.Appearance &&
-            (it == ContentControl.Enabled || it == ContentControl.MergeIcons || it == ContentControl.Style ||
+            (it == ContentControl.Enabled || it == ContentControl.HarmonyStacked ||
+                it == ContentControl.MergeIcons || it == ContentControl.Style ||
                 it == ContentControl.AntiBurnIn || it == ContentControl.EffectiveScope))
     }
 
@@ -235,6 +257,7 @@ internal class ContentSearchLabel(val titleRes: Int, val summaryRes: Int? = null
  */
 internal fun ContentControl.searchLabel(): ContentSearchLabel? = when (this) {
     ContentControl.Enabled,
+    ContentControl.HarmonyStacked,
     ContentControl.MergeIcons,
     ContentControl.Style,
     ContentControl.AntiBurnIn,
@@ -304,12 +327,34 @@ internal fun ContentControl.searchLabel(): ContentSearchLabel? = when (this) {
     ContentControl.ShadeWeatherOpensApp -> ContentSearchLabel(R.string.shade_weather_opens_app_title, R.string.shade_weather_opens_app_summary)
 }
 
+/**
+ * 行级互斥闸门：鸿蒙堆叠信号开启时，除本项之外的设置行统一置灰、不可点。
+ *
+ * 只作用于 [ContentControlRow] 画出来的行，不改任何页面的样式。理由是这个互斥项
+ * 开启后模块已经整体停用（[TrioAppearance.enabled] 为假，所有 Hook 透传），这时
+ * 再改开关只会写进存储、不会改变行为，允许点等于骗人。
+ */
+private val ContentLocked = compositionLocalOf { false }
+
 @Composable
 internal fun ContentControlRow(
     control: ContentControl,
     settings: TrioSettings,
     update: ((SettingsRepository) -> Unit) -> Unit,
     ringSettings: TrioSettings = settings,
+) {
+    val a = TrioAppearance.of(settings)
+    CompositionLocalProvider(ContentLocked provides a.harmonyStacked) {
+        ContentControlRowBody(control, settings, update, ringSettings)
+    }
+}
+
+@Composable
+private fun ContentControlRowBody(
+    control: ContentControl,
+    settings: TrioSettings,
+    update: ((SettingsRepository) -> Unit) -> Unit,
+    ringSettings: TrioSettings,
 ) {
     val a = TrioAppearance.of(settings)
     val master = listOf(a.glyph to R.string.master_title)
@@ -346,6 +391,8 @@ internal fun ContentControlRow(
     when (control) {
         ContentControl.Enabled -> ContentToggle(settings.enabled, R.string.master_module_title,
             R.string.master_module_summary, emptyList()) { value -> update { it.setEnabled(value) } }
+        // 互斥开关：开启要先弹确认（批量停用本模块），关闭直接生效。
+        ContentControl.HarmonyStacked -> HarmonyStackedControl(settings, update)
         ContentControl.MergeIcons -> ContentToggle(settings.mergeIcons, R.string.master_title,
             R.string.merge_icons_summary, listOf(settings.enabled to R.string.master_module_title)) { value -> update { it.setMergeIcons(value) } }
         ContentControl.Style -> {
@@ -642,13 +689,11 @@ internal fun ContentControlRow(
                 dependencies = listOf(settings.shadeWeather to R.string.shade_weather_title),
             ) { value -> update { it.setShadeWeatherStyle(value) } }
         } else Unit
-        ContentControl.ShadeWeatherOpensApp -> ContentToggle(
-            checked = settings.shadeWeatherOpensApp,
-            title = R.string.shade_weather_opens_app_title,
-            summaryRes = R.string.shade_weather_opens_app_summary,
-            dependencies = listOf(settings.shadeWeather to R.string.shade_weather_title),
+        ContentControl.ShadeWeatherOpensApp -> ShadeWeatherOpensAppControl(
+            settings = settings,
+            update = update,
             enabled = settings.enabled,
-        ) { value -> update { it.setShadeWeatherOpensApp(value) } }
+        )
         ContentControl.Power -> ContentToggle(settings.perfPower, R.string.perf_power_title, null, emptyList()) { value -> update { it.setPerfPower(value) } }
         ContentControl.RunningPower -> ContentToggle(checked = settings.perfRunning, title = R.string.perf_running_title, summaryRes = null,
             dependencies = listOf(settings.perfPower to R.string.perf_power_title)) { value -> update { it.setPerfRunning(value) } }
@@ -1048,6 +1093,61 @@ private fun RingPositionControl(
 }
 
 /**
+ * 「点击天气打开应用」开关，拨开时先确认。
+ *
+ * 这一项一旦开启，宿主日期行的点击就被整行改成打开天气应用，原本的日历跳转不再
+ * 触发——这是用户按在开关上时最直接的一次行为替换，只写在说明里不够，所以照
+ * 「鸿蒙堆叠信号」的写法先用 [OverlayDialog] 讲清楚，确认后才落盘；取消则维持
+ * 关闭。关闭不需要确认。
+ */
+@Composable
+private fun ShadeWeatherOpensAppControl(
+    settings: TrioSettings,
+    update: ((SettingsRepository) -> Unit) -> Unit,
+    enabled: Boolean,
+) {
+    var confirming by remember { mutableStateOf(false) }
+
+    ContentToggle(
+        checked = settings.shadeWeatherOpensApp,
+        title = R.string.shade_weather_opens_app_title,
+        summaryRes = R.string.shade_weather_opens_app_summary,
+        dependencies = listOf(settings.shadeWeather to R.string.shade_weather_title),
+        enabled = enabled,
+    ) { value ->
+        if (value) confirming = true else update { it.setShadeWeatherOpensApp(false) }
+    }
+
+    OverlayDialog(
+        show = confirming,
+        title = stringResource(R.string.shade_weather_opens_app_confirm_title),
+        summary = stringResource(R.string.shade_weather_opens_app_confirm_summary),
+        onDismissRequest = { confirming = false },
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            TextButton(
+                text = stringResource(R.string.cancel),
+                onClick = { confirming = false },
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = {
+                    confirming = false
+                    update { it.setShadeWeatherOpensApp(true) }
+                },
+                colors = ButtonDefaults.buttonColorsPrimary(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(stringResource(R.string.shade_weather_opens_app_confirm_action))
+            }
+        }
+    }
+}
+
+/**
  * A switch row, optionally with a description under its title.
  *
  * [summaryRes] is null for the rows that explain themselves: the master switch
@@ -1079,7 +1179,7 @@ private fun ContentToggle(
             title = stringResource(title),
             summary = summary.ifEmpty { null },
             insideMargin = SettingsItemMargin,
-            enabled = enabled,
+            enabled = enabled && !ContentLocked.current,
             onCheckedChange = onChange,
         )
     }
@@ -1108,6 +1208,7 @@ private fun ContentChoice(
     onChange: (Int) -> Unit,
 ) {
     ContentGate(dependencies) {
+        val rowEnabled = enabled && dependencies.all { it.first } && !ContentLocked.current
         if (blockedIndices.isEmpty()) {
             GlassDropdownPreference(
                 items = options.map { stringResource(it) },
@@ -1115,7 +1216,7 @@ private fun ContentChoice(
                 title = stringResource(title),
                 summary = summaryRes?.let { stringResource(it) },
                 insideMargin = SettingsItemMargin,
-                enabled = enabled && dependencies.all { it.first },
+                enabled = rowEnabled,
                 onSelectedIndexChange = onChange,
             )
         } else {
@@ -1131,12 +1232,12 @@ private fun ContentChoice(
                             onClick = { onChange(index) },
                         )
                     },
-                    enabled = enabled && dependencies.all { it.first },
+                    enabled = rowEnabled,
                 ),
                 title = stringResource(title),
                 summary = summaryRes?.let { stringResource(it) },
                 insideMargin = SettingsItemMargin,
-                enabled = enabled && dependencies.all { it.first },
+                enabled = rowEnabled,
             )
         }
     }
@@ -1211,7 +1312,7 @@ private fun ContentMultiChoice(
             },
             summary = summary,
             insideMargin = SettingsItemMargin,
-            enabled = dependencies.all { it.first },
+            enabled = dependencies.all { it.first } && !ContentLocked.current,
         )
     }
 }

@@ -46,8 +46,21 @@ class TrioAppearance(c: TrioSettings) {
     /** True when the arrangement places pieces in bands - the ring and the capsule. */
     @JvmField val slotted: Boolean = !rect
 
-    /** The master switch. Controls all component displays. False hands everything back to system. */
-    @JvmField val enabled: Boolean = c.enabled
+    /**
+     * 鸿蒙堆叠信号互斥开关处于开启状态。
+     *
+     * 只作运行时闸门：所有 Hook、字形挂载与后台采样都按 [enabled] 统一让路，
+     * 但不改写任何其它开关的持久化值，关掉本项后各开关按原值恢复。
+     */
+    @JvmField val harmonyStacked: Boolean = c.harmonyStacked
+
+    /**
+     * The master switch. Controls all component displays. False hands everything back to system.
+     *
+     * 鸿蒙堆叠信号互斥开启时同样为 false：整条 Hook 链在 [io.github.odomu.honorduo.hook.TrioHooks.hook]
+     * 里按这个值透传，等于「本软件所有功能停用」，而不是只改界面显示。
+     */
+    @JvmField val enabled: Boolean = c.enabled && !c.harmonyStacked
 
     /** The merge-icons switch (original trio 3-in-1 switch). */
     @JvmField val mergeIcons: Boolean = c.mergeIcons

@@ -165,6 +165,24 @@
     <string name="section_traffic_arrows">流量箭头</string>
     <string name="master_module_title">模块总开关</string>
     <string name="master_module_summary">所有功能失效开关：关闭后三合一图标、双排信号、图标替换、通知净化等全部停止生效，需重启系统界面</string>
+    <string name="harmony_stacked_title">鸿蒙堆叠信号</string>
+    <string name="harmony_stacked_summary_off">开启后本模块自带功能整体停用，信号图标改由本模块内置的鸿蒙堆叠资源绘制；各开关状态保留，关闭本项即恢复（需重启系统界面）</string>
+    <string name="harmony_stacked_summary_on">本模块自带功能已整体停用，信号图标由内置的鸿蒙堆叠资源绘制；关闭本项按原有开关状态恢复（需重启系统界面）</string>
+    <string name="harmony_stacked_confirm_title">停用本模块？</string>
+    <string name="harmony_stacked_confirm_summary">开启后本模块自带功能全部停用：状态栏字形（电量、信号、蓝牙电量）、时钟、性能与帧率、通知中心日期行天气等一律恢复原生显示；信号图标改由本模块内置的鸿蒙堆叠资源绘制（StackedSignal_5G 的图标与判定逻辑已 1:1 移植）。\n各开关的开启状态会保留，关闭本项即按原状态恢复。\n修改需重启系统界面后生效。</string>
+    <string name="harmony_stacked_confirm_action">停用</string>
+    <string name="batch_close_all_title">关闭全部已开启的功能</string>
+    <string name="batch_close_all_summary">点击后先确认，再逐项关闭当前已开启的 %1$d 项功能（含模块总开关）</string>
+    <string name="batch_close_all_empty">当前没有已开启的功能项</string>
+    <string name="batch_close_all_locked">鸿蒙堆叠信号已开启，本模块整体停用中，无法批量关闭</string>
+    <string name="batch_close_all_confirm_title">关闭全部已开启的功能？</string>
+    <string name="batch_close_all_confirm_summary">将关闭 %1$d 项已开启的功能，包括模块总开关——关完后本模块整体停用，状态栏全部恢复系统原生显示；各开关的开启状态都会被覆盖，之后需要手动重新开启。修改需重启系统界面后生效。</string>
+    <string name="batch_close_all_action">全部关闭</string>
+    <string name="enabled_items_title">已开启的功能项</string>
+    <string name="enabled_items_summary">共 %1$d 项</string>
+    <string name="enabled_items_empty">当前没有已开启的功能项</string>
+    <string name="enabled_items_locked">鸿蒙堆叠信号已开启，本模块整体停用中；这里只能查看，无法关闭</string>
+    <string name="enabled_items_close">关闭</string>
     <string name="master_title">启用三合一图标</string>
     <string name="merge_icons_summary">关闭后保留原生电池，组件自动外显</string>
 
@@ -244,7 +262,10 @@
     <string name="shade_weather_title">显示天气</string>
     <string name="shade_weather_summary">在通知中心日期行后追加实时天气与气温，不影响原日期显示。</string>
     <string name="shade_weather_opens_app_title">点击跳转天气</string>
-    <string name="shade_weather_opens_app_summary">点击通知中心日期行打开系统天气应用，需先开启「显示天气」。</string>
+    <string name="shade_weather_opens_app_summary">点击通知中心日期行打开系统天气应用，需先开启「显示天气」。开启后日期行整行都由本模块接管，系统原生的日历跳转不可用。</string>
+    <string name="shade_weather_opens_app_confirm_title">日历跳转将不可用</string>
+    <string name="shade_weather_opens_app_confirm_summary">开启后，通知中心日期行的整行点击都用于打开系统天气应用，系统原本「点日期打开日历」的行为会被替换，不再触发。\n关闭本项即可恢复原生日历跳转。</string>
+    <string name="shade_weather_opens_app_confirm_action">开启</string>
     <string name="weather_style_title">天气样式</string>
 
 

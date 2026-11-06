@@ -287,11 +287,15 @@ private fun DrawingEditorCard(
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         DrawingSection(R.string.section_feature_switches, PaddingValues(0.dp)) {
+            // 鸿蒙堆叠信号互斥：开启即整体停用本模块，先确认再生效。
+            ContentControlRow(ContentControl.HarmonyStacked, settings, update)
             ContentControlRow(ContentControl.Enabled, settings, update)
             ContentControlRow(ContentControl.MergeIcons, settings, update)
             ContentControlRow(ContentControl.AntiBurnIn, settings, update)
             // 模块生效范围：与上游一致，放在功能开关最后一行的位置。
             ContentControlRow(ContentControl.EffectiveScope, settings, update)
+            // 关闭全部已开启的功能项：动作行，点一下先确认，再逐项关闭。
+            CloseAllControl(settings, update)
         }
 
         DrawingSection(R.string.section_merge_style) {

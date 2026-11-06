@@ -40,6 +40,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -1751,7 +1752,7 @@ private fun LazyListScope.aboutTab(
     onImportBackup: () -> Unit,
     update: ((SettingsRepository) -> Unit) -> Unit,
 ) {
-    item { ActivatedRow(settings = settings, service = service) }
+    item { ActivatedRow(settings = settings, service = service, update = update) }
     item { InfoCard(service = service) }
     item { SectionTitle(stringResource(R.string.group_source)) }
     item {
@@ -1899,9 +1900,15 @@ private fun InfoRow(label: String, value: String, bottomPadding: Dp = 24.dp) {
  * the block keeps its proportions instead of looking squat on a tablet.
  */
 @Composable
-private fun ActivatedRow(settings: TrioSettings, service: XposedService?) {
+private fun ActivatedRow(
+    settings: TrioSettings,
+    service: XposedService?,
+    update: ((SettingsRepository) -> Unit) -> Unit,
+) {
     val context = LocalContext.current
     val module = remember(context) { readModuleInfo(context) }
+    // 「已开启显示项」卡片是这一页唯一的入口：点进去看清单、单独关、整体关。
+    var showEnabled by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1930,8 +1937,17 @@ private fun ActivatedRow(settings: TrioSettings, service: XposedService?) {
                 label = stringResource(R.string.about_enabled_count),
                 value = enabledCount(settings).toString(),
                 modifier = Modifier.weight(1f),
+                onClick = { showEnabled = true },
             )
         }
+    }
+
+    if (showEnabled) {
+        EnabledItemsSheet(
+            settings = settings,
+            update = update,
+            onDismiss = { showEnabled = false },
+        )
     }
 }
 
@@ -2011,9 +2027,22 @@ private fun ActivatedCard(active: Boolean, version: String, modifier: Modifier =
 
 /** One of the two short right-hand cards: a quiet label over a large figure. */
 @Composable
-private fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
+private fun StatCard(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    /** 非空时这张卡是可点入口；空表示纯读数列，保持原来的不可点行为。 */
+    onClick: (() -> Unit)? = null,
+) {
     Card(
-        modifier = modifier.fillMaxHeight(),
+        modifier = modifier.fillMaxHeight().then(
+            // 只要点击，不要水波纹：卡片本身的液态玻璃与 Tilt 按压反馈不能多一层方形涟漪。
+            if (onClick != null) Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ) else Modifier,
+        ),
         // Same read-out-not-a-button treatment as [ActivatedCard]; the two cards
         // sit side by side, so they must not disagree about how they respond.
         pressFeedbackType = PressFeedbackType.Tilt,
@@ -2024,12 +2053,25 @@ private fun StatCard(label: String, value: String, modifier: Modifier = Modifier
                 .padding(14.dp),
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(
-                text = label,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = label,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                // 可点卡片在标题右侧补一个 chevron：这是这一页唯一的入口，
+                // 不加箭头时它看起来和旁边的纯读数列毫无区别。
+                if (onClick != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        imageVector = ImageVector.vectorResource(R.drawable.ic_lucide_chevron_right),
+                        contentDescription = null,
+                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.5f),
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
             Text(
                 text = value,
                 fontSize = 24.sp,
@@ -2573,31 +2615,12 @@ private fun scopeCount(service: XposedService?): Int {
 }
 
 /**
- * How many of the appearance switches are on, as a single at-a-glance figure.
+ * 已开启的功能项数量。
  *
- * Derived from [TrioAppearance] rather than read off [TrioSettings] directly.
- * The switches gate one another, and the count used to ignore both the master
- * switch and those gates, so it could report a healthy total while the glyph
- * drew nothing at all.
+ * 改成与「已开启显示项」清单同一来源：卡片上的数字和点进去看到的条数必须一致，
+ * 所以两者都从 [enabledToggles] 取，而不是写两套各自为政的判定。
  */
-private fun enabledCount(settings: TrioSettings): Int {
-    val a = TrioAppearance.of(settings)
-    if (!a.glyph) return 0
-    return listOf(
-        a.wifi,
-        // The reading counts in either position: in the ring it is the dot row,
-        // outside it is the bars the out-of-ring view draws.
-        a.mobile,
-        // The second row only exists when the mobile level is drawn as dots, so
-        // out of ring - where nothing is drawn along the bottom at all - it is
-        // not a second thing on screen however the switch is set.
-        a.dualSim && a.signalDots(),
-        a.value,
-        a.drawsBolt(),
-        // The network type is a three-way mode now; anything but "off" counts as on.
-        a.typeAnywhere(),
-    ).count { it }
-}
+private fun enabledCount(settings: TrioSettings): Int = enabledToggles(settings).size
 
 /**
  * Every getter here is a binder call into the framework daemon, so all of them are

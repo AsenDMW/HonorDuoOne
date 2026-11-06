@@ -68,6 +68,14 @@ class SettingsRepository(context: Context) {
 
     fun setEnabled(value: Boolean) = writeBoolean(Prefs.KEY_ENABLED, value)
 
+    /**
+     * 鸿蒙堆叠信号互斥开关。
+     *
+     * 只写本项自己的键：其它开关的持久化值原样保留，关闭本项后它们按原值恢复，
+     * 所以这里既不需要、也不允许批量改写别的 key。
+     */
+    fun setHarmonyStacked(value: Boolean) = writeBoolean(Prefs.KEY_HARMONY_STACKED, value)
+
     /** 圆环/胶囊与双排信号互斥：开启三合一字形时自动关闭双排信号。 */
     fun setMergeIcons(value: Boolean) {
         if (value) {

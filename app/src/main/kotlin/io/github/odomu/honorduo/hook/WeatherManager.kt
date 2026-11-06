@@ -17,6 +17,7 @@ import android.content.IntentFilter
 import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import io.github.odomu.honorduo.model.TrioConfig
@@ -60,6 +61,19 @@ internal object WeatherManager {
     @Volatile private var lastFetchTime = 0L
     private const val CACHE_EXPIRY_MS = 30 * 60 * 1000L // 30 minutes to eliminate battery drain
 
+    /** 供应商连续 notify 的合并窗口：一串通知只查一次。 */
+    private const val NOTIFY_DEBOUNCE_MS = 600L
+
+    /** 自己这次查询引起的回响通知在这个窗口内丢掉，避免「查→notify→查」自激。 */
+    private const val NOTIFY_SUPPRESS_MS = 1_500L
+
+    /** 通知驱动的查询最小间隔：天气没有秒级变化，一分钟一次已经足够。 */
+    private const val NOTIFY_MIN_GAP_MS = 60_000L
+
+    @Volatile private var notifyScheduled = false
+    @Volatile private var suppressNotifyUntil = 0L
+    @Volatile private var lastNotifyFetch = 0L
+
     fun start(context: Context) {
         if (started) return
         synchronized(this) {
@@ -71,9 +85,7 @@ internal object WeatherManager {
         try {
             app.contentResolver.registerContentObserver(WEATHER_URI, true, object : ContentObserver(main) {
                 override fun onChange(selfChange: Boolean) {
-                    if (ScreenStateTracker.isScreenOn) {
-                        fetchAsync(app, force = true)
-                    }
+                    onProviderChanged(app)
                 }
             })
         } catch (_: Throwable) {}
@@ -85,9 +97,7 @@ internal object WeatherManager {
             }
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(c: Context?, intent: Intent?) {
-                    if (ScreenStateTracker.isScreenOn) {
-                        fetchAsync(app, force = true)
-                    }
+                    onProviderChanged(app)
                 }
             }
             ContextCompat.registerReceiver(app, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
@@ -98,6 +108,33 @@ internal object WeatherManager {
         }
 
         fetchAsync(app, force = true)
+    }
+
+    /**
+     * 供应商数据变化的唯一入口（内容观察 + 广播都走这里）。
+     *
+     * 以前通知一到就 `fetchAsync(force = true)`：force 会绕过 30 分钟缓存，而供应商
+     * 在自己的数据被读取/更新后往往还会再 notify 一次，于是「查询 → notify → 查询」
+     * 可以自激；通知中心展开时正撞上这串查询，主线程连续收到状态栏重排与日期重算，
+     * 展开动画就掉帧。现在把一串通知合并成一次查询，并让查询走缓存判定。
+     */
+    private fun onProviderChanged(app: Context) {
+        if (!ScreenStateTracker.isScreenOn) return
+        // 这次通知就是上一次查询自己引起的回响，丢掉。
+        val now = SystemClock.elapsedRealtime()
+        if (now < suppressNotifyUntil) return
+        if (now - lastNotifyFetch < NOTIFY_MIN_GAP_MS) return
+        if (notifyScheduled) return
+        notifyScheduled = true
+        main.postDelayed({
+            notifyScheduled = false
+            if (!ScreenStateTracker.isScreenOn) return@postDelayed
+            lastNotifyFetch = SystemClock.elapsedRealtime()
+            // 数据确实变了：只把旧缓存打旧，查询仍走非强制路径（由时间戳与上面的
+            // 静默窗口兜底），这样即使供应商反复 notify 也只会退化成一次查询。
+            lastFetchTime = 0L
+            fetchAsync(app)
+        }, NOTIFY_DEBOUNCE_MS)
     }
 
     fun onScreenOn(context: Context) {
@@ -120,6 +157,8 @@ internal object WeatherManager {
         lastFetchTime = now
         executor.execute {
             if (!ScreenStateTracker.isScreenOn) return@execute
+            // 查询本身可能让供应商再 notify 一次：先开静默窗口，回响不再触发查询。
+            suppressNotifyUntil = SystemClock.elapsedRealtime() + NOTIFY_SUPPRESS_MS
             try {
                 val queried = queryWeather(context)
                 if (queried != null && queried != data) {
@@ -127,7 +166,10 @@ internal object WeatherManager {
                     currentWeather = queried.text()
                     TrioState.sWeather = queried.text()
                     main.post {
-                        BarClockManager.sync(TrioConfig.appearance())
+                        val a = TrioConfig.appearance()
+                        // 只有状态栏时钟会用天气参与字形排版；只开通知中心天气时再跑
+                        // 一遍 sync，等于在面板动画里白排一次整条状态栏。
+                        if (a.clockWeather) BarClockManager.sync(a)
                         ShadeHook.onWeatherChanged()
                     }
                 }

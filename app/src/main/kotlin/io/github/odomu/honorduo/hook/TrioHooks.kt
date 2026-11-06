@@ -68,6 +68,7 @@ internal object TrioHooks {
         hooked += PanelExpansionHook.install(module, cl)
         hooked += CapsuleScaleHook.install(module, cl)
         hooked += BtBatteryHook.install(module, cl)
+        StackedSignalHook.install(module, cl)
 
         log(
             module,

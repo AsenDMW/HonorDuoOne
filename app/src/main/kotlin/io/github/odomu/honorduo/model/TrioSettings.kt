@@ -34,6 +34,8 @@ class TrioSettings {
     @JvmField
     var enabled = Prefs.DEF_ENABLED
     @JvmField
+    var harmonyStacked = Prefs.DEF_HARMONY_STACKED
+    @JvmField
     var mergeIcons = Prefs.DEF_MERGE_ICONS
     @JvmField
     var showWifi = false
@@ -465,6 +467,7 @@ class TrioSettings {
         @JvmStatic
         fun defaults(): TrioSettings = TrioSettings().apply {
             enabled = Prefs.DEF_ENABLED
+            harmonyStacked = Prefs.DEF_HARMONY_STACKED
             mergeIcons = Prefs.DEF_MERGE_ICONS
             showWifi = Prefs.DEF_SHOW_WIFI
             showMobile = Prefs.DEF_SHOW_MOBILE
@@ -626,6 +629,7 @@ class TrioSettings {
             val s = TrioSettings()
             s.enabled = p.getBoolean(Prefs.KEY_ENABLED, Prefs.DEF_ENABLED)
             s.mergeIcons = p.getBoolean(Prefs.KEY_MERGE_ICONS, Prefs.DEF_MERGE_ICONS)
+            s.harmonyStacked = p.getBoolean(Prefs.KEY_HARMONY_STACKED, Prefs.DEF_HARMONY_STACKED)
             // The style first: the component switches below are stored per
             // arrangement, so which key to read depends on it.
             s.navStyle = Prefs.normalizeNavStyle(
@@ -969,6 +973,7 @@ class TrioSettings {
             val s = TrioSettings()
             s.enabled = bundle.getBoolean(Prefs.KEY_ENABLED, Prefs.DEF_ENABLED)
             s.mergeIcons = bundle.getBoolean(Prefs.KEY_MERGE_ICONS, Prefs.DEF_MERGE_ICONS)
+            s.harmonyStacked = bundle.getBoolean(Prefs.KEY_HARMONY_STACKED, Prefs.DEF_HARMONY_STACKED)
             // The style first, for the same reason as the stored read.
             s.navStyle = Prefs.normalizeNavStyle(
                 bundle.getInt(Prefs.KEY_NAV_STYLE, Prefs.DEF_NAV_STYLE),
@@ -1510,6 +1515,7 @@ class TrioSettings {
     fun copy(): TrioSettings = TrioSettings().also { s ->
         s.enabled = enabled
         s.mergeIcons = mergeIcons
+        s.harmonyStacked = harmonyStacked
         s.showWifi = showWifi
         s.showMobile = showMobile
         s.showValue = showValue
@@ -1664,6 +1670,7 @@ class TrioSettings {
         when (k) {
             Prefs.KEY_ENABLED -> enabled = src.enabled
             Prefs.KEY_MERGE_ICONS -> mergeIcons = src.mergeIcons
+            Prefs.KEY_HARMONY_STACKED -> harmonyStacked = src.harmonyStacked
             Prefs.KEY_SHOW_WIFI -> showWifi = src.showWifi
             Prefs.KEY_SHOW_MOBILE -> showMobile = src.showMobile
             Prefs.KEY_SHOW_VALUE -> showValue = src.showValue
@@ -1816,6 +1823,7 @@ class TrioSettings {
         putInt(Prefs.KEY_TRIO_STYLE, style)
         putBoolean(Prefs.KEY_ENABLED, enabled)
         putBoolean(Prefs.KEY_MERGE_ICONS, mergeIcons)
+        putBoolean(Prefs.KEY_HARMONY_STACKED, harmonyStacked)
         putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_WIFI, style), showWifi)
         putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_MOBILE, style), showMobile)
         putBoolean(Prefs.styledKey(Prefs.KEY_SHOW_VALUE, style), showValue)
@@ -1959,6 +1967,7 @@ class TrioSettings {
         if (other !is TrioSettings) return false
         return enabled == other.enabled &&
             mergeIcons == other.mergeIcons &&
+            harmonyStacked == other.harmonyStacked &&
             showWifi == other.showWifi &&
             showMobile == other.showMobile &&
             showValue == other.showValue &&

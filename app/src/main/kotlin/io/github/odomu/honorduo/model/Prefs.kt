@@ -47,6 +47,12 @@ object Prefs {
 
     // Keys.
     const val KEY_ENABLED = "enabled"
+    /**
+     * 鸿蒙堆叠信号互斥开关：开启后本模块整体停用（Hook 全部透传、字形撤离），
+     * 把信号图标交还给 HarmonyOS 堆叠模块；本项不改动其它开关的持久化值，
+     * 关闭后各开关按原值恢复。
+     */
+    const val KEY_HARMONY_STACKED = "harmony_stacked"
     const val KEY_MERGE_ICONS = "merge_icons"
     /**
      * Overall size of the trio glyph, as a percentage of the size the host box
@@ -1149,6 +1155,7 @@ object Prefs {
 
     // Defaults.
     const val DEF_ENABLED = true
+    const val DEF_HARMONY_STACKED = false
     const val DEF_MERGE_ICONS = true
     const val DEF_SHOW_WIFI = false
     const val DEF_SHOW_MOBILE = true

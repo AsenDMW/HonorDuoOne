@@ -10,8 +10,11 @@
 
 package io.github.odomu.honorduo.hook
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewParent
 import android.view.ViewTreeObserver
@@ -38,8 +41,17 @@ internal object ShadeHook {
     private const val CLS_NOTIF_BELL = "com.android.systemui.statusbar.notification.panelheader.NotifMgeBtn"
     private const val CLS_NOTIF_INTERACTOR =
         "com.android.systemui.statusbar.notification.panelheader.NotifCenterHeaderInteractorImpl"
-    private const val CLS_HEADER_VM =
-        "com.android.systemui.statusbar.notification.panelheader.NotifCenterHeaderViewModelImpl"
+
+    /**
+     * 日期行的点击处理在 `panelheader.viewmodel` 子包里。
+     *
+     * 这里曾经漏掉 `.viewmodel`，`onClickDate` 根本没被挂上，点日期走的是宿主原生
+     * 逻辑（打开日历），所以「点击打开天气」的开关看起来完全没生效。
+     */
+    private val HEADER_VM_CANDIDATES = arrayOf(
+        "com.android.systemui.statusbar.notification.panelheader.viewmodel.NotifCenterHeaderViewModelImpl",
+        "com.android.systemui.statusbar.notification.panelheader.NotifCenterHeaderViewModelImpl",
+    )
 
     private const val FIELD_POWER_BUTTON = "mPowerButton"
     private const val METHOD_CLOCK_DATE = "getCurrentClockDate"
@@ -159,8 +171,28 @@ internal object ShadeHook {
      * one-line box, so a `\n` there pushed the real date out of view instead of
      * adding a row above it. The separators keep the three pieces readable and the
      * date itself is never touched.
+     *
+     * 上一次拼接结果缓存在下面：宿主到底每分钟重建一次、还是每次重组都重建，两个
+     * 说法都出现过；按「输入没变就直接返回」兜底，同一分钟、同一份天气、同一组
+     * 开关下不重算农历与天气，也不产生新分配。
      */
+    private var cachedLine: String? = null
+    private var cachedMinute = -1L
+    private var cachedLunar = false
+    private var cachedWeatherOn = false
+    private var cachedStyle = -1
+    private var cachedData: WeatherManager.WeatherData? = null
+    private var cachedValue = ""
+
     private fun decorateDateLine(line: String, lunar: Boolean, weather: Boolean): String {
+        val minute = System.currentTimeMillis() / 60_000L
+        val data = if (weather) WeatherManager.data else null
+        val style = if (weather) TrioConfig.appearance().shadeWeatherStyle else -1
+        if (line == cachedLine && minute == cachedMinute && lunar == cachedLunar &&
+            weather == cachedWeatherOn && style == cachedStyle && data == cachedData
+        ) {
+            return cachedValue
+        }
         val extra = StringBuilder()
         if (lunar) {
             val l = ClockTicker.formatLunar(java.util.Date())
@@ -173,22 +205,41 @@ internal object ShadeHook {
                 extra.append(w)
             }
         }
-        if (extra.isEmpty()) return line
-        return "$line ${extra}"
+        val result = if (extra.isEmpty()) line else "$line $extra"
+        cachedLine = line
+        cachedMinute = minute
+        cachedLunar = lunar
+        cachedWeatherOn = weather
+        cachedStyle = style
+        cachedData = data
+        cachedValue = result
+        return result
     }
 
     /**
      * Hooks the click on the shade's date line.
      *
-     * When [TrioAppearance.shadeWeatherOpensApp] is on, the tap opens the system
-     * weather app instead of the clock. The hook targets `onClickDate` on the
-     * notification header ViewModel, which is what the Compose date text calls.
+     * When [TrioAppearance.shadeWeatherOpensApp] is on, the whole line opens the
+     * system weather app instead of the clock: the host has one clickable for the
+     * entire string, so there is no per-word target to tell apart. The setting's
+     * own confirmation dialog states that the native calendar jump is lost while
+     * this is on. With the switch off, the hook calls through and the line keeps
+     * the host's calendar behaviour.
      */
     private fun hookDateClick(module: XposedModule, cl: ClassLoader): Int {
-        val vm = Refl.cls(CLS_HEADER_VM, cl) ?: return 0
+        var vm: Class<*>? = null
+        for (name in HEADER_VM_CANDIDATES) {
+            vm = Refl.cls(name, cl)
+            if (vm != null) break
+        }
+        if (vm == null) {
+            TrioHooks.log(TrioHooks.LOG_WARN, "shade date click: header view model not found")
+            return 0
+        }
         val onClickDate = TrioHooks.methodNamed(vm, "onClickDate", 0) ?: return 0
         return TrioHooks.hook(module, onClickDate, "honorduo-shade-date-click") { chain ->
-            if (TrioConfig.appearance().shadeWeatherOpensApp) {
+            val a = TrioConfig.appearance()
+            if (a.shadeWeather && a.shadeWeatherOpensApp) {
                 launchWeatherApp()
                 return@hook null
             }
@@ -201,30 +252,71 @@ internal object ShadeHook {
     /**
      * Opens the system weather app, dismissing the keyguard and shade.
      *
-     * Tries the StatusBar's `startActivityDismissingKeyguard` first (the host's own
-     * pattern), which also collapses the shade; falls back to a plain startActivity.
+     * `getLaunchIntentForPackage` returns an intent whose component is already set to
+     * the weather app's launcher activity, so it cannot be handed to another app the
+     * way the host's implicit date intent was. If the app is not installed there is
+     * nothing sensible to open: the click is swallowed and logged instead of falling
+     * through to the clock/calendar.
      */
     private fun launchWeatherApp() {
         val ctx = appContext() ?: return
-        val intent = ctx.packageManager.getLaunchIntentForPackage(HONOR_WEATHER_PKG)
-            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            ?: run {
-                TrioHooks.log(TrioHooks.LOG_WARN, "shade weather: $HONOR_WEATHER_PKG not found")
-                return
-            }
-        if (!launchFromStatusBar(intent)) {
+        val intent = resolveWeatherIntent(ctx)
+        if (intent == null) {
+            TrioHooks.log(TrioHooks.LOG_WARN, "shade weather: $HONOR_WEATHER_PKG not installed")
+            return
+        }
+        if (!launchFromStatusBar(ctx, intent)) {
             runCatching { ctx.startActivity(intent) }
         }
     }
 
-    private fun launchFromStatusBar(intent: Intent): Boolean {
-        val ctx = appContext() ?: return false
-        val loader = ctx.classLoader
-        val sb = Refl.cls("com.android.systemui.statusbar.phone.StatusBar", loader) ?: return false
-        val instance = runCatching { Refl.method(sb, "getInstance")?.invoke(null) }.getOrNull() ?: return false
-        val m = TrioHooks.methodNamed(instance.javaClass, "startActivityDismissingKeyguard", 1) ?: return false
-        return runCatching { m.invoke(instance, intent) }.isSuccess
+    /** Explicit launcher intent for the weather app, or null when it is not installed. */
+    private fun resolveWeatherIntent(ctx: Context): Intent? {
+        val pm = ctx.packageManager
+        val launch = runCatching { pm.getLaunchIntentForPackage(HONOR_WEATHER_PKG) }.getOrNull()
+        val component = launch?.component
+            ?: runCatching {
+                val probe = Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_LAUNCHER)
+                    .setPackage(HONOR_WEATHER_PKG)
+                pm.resolveActivity(probe, 0)?.activityInfo?.let {
+                    ComponentName(it.packageName, it.name)
+                }
+            }.getOrNull()
+            ?: return null
+        return Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+            .setComponent(component)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
+
+    /**
+     * The host's own dismiss-then-launch, so the shade closes behind the app.
+     *
+     * Resolves `StatusBar` through `Dependency.get` (the host's service locator) and
+     * uses the widest `startActivityDismissingKeyguard` overload, which is the call
+     * the panel itself uses; `StatusBar.getInstance` does not exist on current ROMs.
+     */
+    private fun launchFromStatusBar(ctx: Context, intent: Intent): Boolean = runCatching {
+        val loader = ctx.classLoader
+        val statusBarClass = Refl.cls("com.android.systemui.statusbar.phone.StatusBar", loader)
+            ?: return@runCatching false
+        val dependency = Refl.cls("com.android.systemui.plugins.Dependency", loader)
+            ?: return@runCatching false
+        val statusBar = Refl.method(dependency, "get", Class::class.java)
+            ?.invoke(null, statusBarClass) ?: return@runCatching false
+        val launch = statusBarClass.methods.firstOrNull {
+            it.name.contains("startActivityDismissingKeyguard")
+        } ?: return@runCatching false
+        launch.isAccessible = true
+        when (launch.parameterCount) {
+            4 -> launch.invoke(statusBar, intent, true, true, 536870912)
+            3 -> launch.invoke(statusBar, intent, true, true)
+            1 -> launch.invoke(statusBar, intent)
+            else -> return@runCatching false
+        }
+        true
+    }.getOrDefault(false)
 
     /**
      * The weather in the chosen style. This line is plain text, so every icon style
@@ -249,13 +341,28 @@ internal object ShadeHook {
         }
     }
 
+    /** 主线程合并/延迟用；见 [onWeatherChanged]。 */
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var refreshScheduled = false
+
+    /** 合并后的一次主机重算，等展开动画过去再插进去。 */
+    private const val REFRESH_DELAY_MS = 400L
+
     /**
-     * Called by [WeatherManager] when a new reading lands: forces the shade's date
-     * line to recompute so the weather appears immediately instead of waiting for
-     * the next minute tick.
+     * Weather changed: ask the host to rebuild the date line once, but not right now.
+     *
+     * Called from the main thread after a weather reading lands. Nudging TimeManager
+     * synchronously here means the shade recomposes and re-measures in the middle of
+     * the panel's open animation — the exact frame the user sees stutter. The nudge
+     * is merged and delayed so it lands after the animation.
      */
     fun onWeatherChanged() {
-        refreshDateLine()
+        if (refreshScheduled) return
+        refreshScheduled = true
+        mainHandler.postDelayed({
+            refreshScheduled = false
+            refreshDateLine()
+        }, REFRESH_DELAY_MS)
     }
 
     /** Recomputes the date line by nudging the host's TimeManager. */
@@ -282,9 +389,24 @@ internal object ShadeHook {
         return manager
     }
 
-    private fun appContext(): android.content.Context? = runCatching {
-        val at = Class.forName("android.app.ActivityThread")
-        val app = at.getMethod("currentApplication").invoke(null) as? android.app.Application
-        app?.applicationContext
-    }.getOrNull()
+    @Volatile
+    private var sAppContext: WeakReference<android.content.Context>? = null
+
+    /**
+     * Application context, resolved once.
+     *
+     * 以前每次调用都做一次 `Class.forName` + `getMethod` + `invoke`。这段代码在
+     * 日期行的热路径上（天气读不到时每个重建周期都会走到），缓存之后这条路径上
+     * 不再有反射。
+     */
+    private fun appContext(): android.content.Context? {
+        sAppContext?.get()?.let { return it }
+        val ctx = runCatching {
+            val at = Class.forName("android.app.ActivityThread")
+            val app = at.getMethod("currentApplication").invoke(null) as? android.app.Application
+            app?.applicationContext
+        }.getOrNull() ?: return null
+        sAppContext = WeakReference(ctx)
+        return ctx
+    }
 }

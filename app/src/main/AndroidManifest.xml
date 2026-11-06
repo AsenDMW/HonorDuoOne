@@ -46,8 +46,8 @@
         <meta-data
             android:name="xposeddescription"
             android:value="@string/xposed_description" />
-        <!-- 刻意不声明 xposedscope / META-INF/xposed/scope.list：这两者都会被 LSPosed
-             当成「推荐作用域」自动勾选，导致用户没手动授权就生效。 -->
+        <!-- scope.list（META-INF/xposed/scope.list）声明推荐作用域，LSPosed 会显示为
+             「推荐应用」并预勾选，与上游 HonorDuo / HonorDuoBar 行为一致。 -->
         <meta-data
             android:name="libxposed"
             android:value="true" />

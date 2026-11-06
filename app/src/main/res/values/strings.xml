@@ -243,6 +243,8 @@
     <string name="shade_lunar_summary">在通知中心日期行后追加农历，不影响原日期显示。</string>
     <string name="shade_weather_title">显示天气</string>
     <string name="shade_weather_summary">在通知中心日期行后追加实时天气与气温，不影响原日期显示。</string>
+    <string name="shade_weather_opens_app_title">点击跳转天气</string>
+    <string name="shade_weather_opens_app_summary">点击通知中心日期行打开系统天气应用，需先开启「显示天气」。</string>
     <string name="weather_style_title">天气样式</string>
 
 

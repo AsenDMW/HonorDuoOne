@@ -1,6 +1,6 @@
 ﻿# Honor Duo One
 
-[![版本](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/AsenDMW/HonorDuoOne/releases/latest)
+[![版本](https://img.shields.io/badge/version-1.1.8-blue)](https://github.com/AsenDMW/HonorDuoOne/releases/latest)
 [![许可证](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-10%2B-green)](https://developer.android.com)
 [![LSPosed](https://img.shields.io/badge/LSPosed-API%20102-orange)](https://github.com/LSPosed/LSPosed)
@@ -20,6 +20,7 @@
 - **智能防烧屏**：OLED 屏幕的 30 秒 3×3 离散网格微移位，边界安全钳制，开销极低。
 - **灵动胶囊避让**：胶囊展开时按屏幕物理坐标做碰撞检测，只让被遮挡的组件让位。
 - **可放置组件**：电量数字、Wi-Fi 弧、移动信号（卡一/卡二可拆）、网络制式、充电闪电、功率、温度、帧率、时钟等均可独立放置或交还系统。
+- **通知中心天气**：在通知中心日期行末尾显示实时天气与气温，支持文字/图标/图标加文字三种样式，点击日期行可直接打开系统天气应用。
 - **双排信号**：主卡信号柱 + 副卡圆点，支持 4/5 格切换与制式标、流量箭头附加显示。
 - **息屏正确交接**：全屏 AOD 复用状态栏行时把电池完整交还宿主，息屏不再缺电量图标。
 - **时钟按需接管**：秒/日期/星期/农历/天气全关时完全不碰原生时钟。

@@ -110,31 +110,81 @@ internal object WeatherManager {
     fun fetchAsync(context: Context, force: Boolean = false) {
         // Suspend weather queries during screen-off to eliminate battery drain
         if (!ScreenStateTracker.isScreenOn) return
+        val a = TrioConfig.appearance()
+        if (!a.enabled || (!a.clockWeather && !a.shadeWeather)) return
         val now = System.currentTimeMillis()
-        if (!force && now - lastFetchTime < CACHE_EXPIRY_MS && data != null) {
-            return
-        }
+        // The stamp alone answers "did we try recently", so a failed or still-empty
+        // read is not re-attempted on every caller. It used to require `data != null`,
+        // which meant the cache never applied to the one case that needed it: no data yet.
+        if (!force && now - lastFetchTime < CACHE_EXPIRY_MS) return
+        lastFetchTime = now
         executor.execute {
             if (!ScreenStateTracker.isScreenOn) return@execute
             try {
                 val queried = queryWeather(context)
-                if (queried != null) {
-                    lastFetchTime = System.currentTimeMillis()
-                    val hasChanged = queried != data
-                    if (hasChanged) {
-                        data = queried
-                        currentWeather = queried.text()
-                        TrioState.sWeather = queried.text()
-                        main.post {
-                            BarClockManager.sync(TrioConfig.appearance())
-                        }
+                if (queried != null && queried != data) {
+                    data = queried
+                    currentWeather = queried.text()
+                    TrioState.sWeather = queried.text()
+                    main.post {
+                        BarClockManager.sync(TrioConfig.appearance())
+                        ShadeHook.onWeatherChanged()
                     }
                 }
             } catch (_: Throwable) {}
         }
     }
 
-    private fun queryWeather(context: Context): WeatherData? {
+    /**
+     * Re-reads the weather after a settings change that could turn the feature on.
+     */
+    fun onConfigChanged(context: Context) {
+        val a = TrioConfig.appearance()
+        if (a.enabled && (a.clockWeather || a.shadeWeather)) {
+            fetchAsync(context, force = true)
+        }
+    }
+
+    private fun queryWeather(context: Context): WeatherData? =
+        queryFromCall(context) ?: queryFromCursor(context)
+
+    /**
+     * Queries weather via the system weather provider's `call` method (MagicOS
+     * standard). Some ROMs expose current weather only through this call and leave
+     * the cursor table empty, so the call is tried first.
+     */
+    private fun queryFromCall(context: Context): WeatherData? = runCatching {
+        val cr = context.contentResolver ?: return null
+        val extras = android.os.Bundle().apply {
+            putInt("city_type", 10)
+            putInt("dayAndNightWeather", 1)
+        }
+        val bundle = cr.call(WEATHER_URI, "query_home_city_weather", null, extras) ?: return null
+        val json = bundle.getString("key_home_city_weather")?.takeIf { it.isNotEmpty() } ?: return null
+        val root = org.json.JSONObject(json)
+        val days = root.optJSONArray("weather") ?: return null
+        val dayItems = (0 until days.length()).mapNotNull { days.optJSONObject(it) }
+        val today = dayItems.firstOrNull { it.optInt("day_index") == 1 } ?: return null
+
+        val now = System.currentTimeMillis()
+        val sunrise = today.optLong("sunrise_time")
+        val sunset = today.optLong("sunset_time")
+        val isNight = sunrise > 0L && sunset > 0L && (now < sunrise || now > sunset)
+        val prefix = if (isNight) "night_" else ""
+
+        val temp = today.optDouble("${prefix}current_temperature", Double.NaN)
+            .takeIf { !it.isNaN() } ?: return null
+        val fahrenheit = root.optString("temp_unit").equals("F", true)
+        val condition = today.optString("${prefix}weather_native_des").trim()
+            .takeIf { it.isNotEmpty() }
+            ?: mapIconToCondition(today.optInt("${prefix}weather_icon", -1))
+
+        val tempC = if (fahrenheit) ((temp - 32.0) * 5.0 / 9.0).roundToInt() else temp.roundToInt()
+        WeatherData(condition, tempC)
+    }.getOrNull()
+
+    /** Fallback query via ContentProvider table cursor. */
+    private fun queryFromCursor(context: Context): WeatherData? {
         val cr = context.contentResolver ?: return null
         return cr.query(
             WEATHER_URI,

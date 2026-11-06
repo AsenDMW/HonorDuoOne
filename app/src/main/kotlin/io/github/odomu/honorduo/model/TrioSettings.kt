@@ -428,6 +428,9 @@ class TrioSettings {
     /** Notification shade: text, glyph or both for that weather. */
     @JvmField var shadeWeatherStyle = Prefs.DEF_SHADE_WEATHER_STYLE
 
+    /** Tapping the shade's date line opens the system weather app. */
+    @JvmField var shadeWeatherOpensApp = Prefs.DEF_SHADE_WEATHER_OPENS_APP
+
     /** Draws the battery temperature in the same view. */
     @JvmField
     var perfTemp = false
@@ -549,6 +552,7 @@ class TrioSettings {
             shadeLunar = Prefs.DEF_SHADE_LUNAR
             shadeWeather = Prefs.DEF_SHADE_WEATHER
             shadeWeatherStyle = Prefs.DEF_SHADE_WEATHER_STYLE
+            shadeWeatherOpensApp = Prefs.DEF_SHADE_WEATHER_OPENS_APP
             perfTemp = Prefs.DEF_PERF_TEMP
             perfFps = Prefs.DEF_PERF_FPS
             perfScale = Prefs.DEF_PERF_SCALE
@@ -787,6 +791,7 @@ class TrioSettings {
             s.shadeLunar = p.getBoolean(Prefs.KEY_SHADE_LUNAR, Prefs.DEF_SHADE_LUNAR)
             s.shadeWeather = p.getBoolean(Prefs.KEY_SHADE_WEATHER, Prefs.DEF_SHADE_WEATHER)
             s.shadeWeatherStyle = p.getInt(Prefs.KEY_SHADE_WEATHER_STYLE, Prefs.DEF_SHADE_WEATHER_STYLE)
+            s.shadeWeatherOpensApp = p.getBoolean(Prefs.KEY_SHADE_WEATHER_OPENS_APP, Prefs.DEF_SHADE_WEATHER_OPENS_APP)
             s.perfTemp = p.getBoolean(Prefs.KEY_PERF_TEMP, Prefs.DEF_PERF_TEMP)
             s.perfFps = p.getBoolean(Prefs.KEY_PERF_FPS, Prefs.DEF_PERF_FPS)
             s.perfScale = Prefs.clamp(
@@ -1127,6 +1132,7 @@ class TrioSettings {
             s.shadeLunar = bundle.getBoolean(Prefs.KEY_SHADE_LUNAR, Prefs.DEF_SHADE_LUNAR)
             s.shadeWeather = bundle.getBoolean(Prefs.KEY_SHADE_WEATHER, Prefs.DEF_SHADE_WEATHER)
             s.shadeWeatherStyle = bundle.getInt(Prefs.KEY_SHADE_WEATHER_STYLE, Prefs.DEF_SHADE_WEATHER_STYLE)
+            s.shadeWeatherOpensApp = bundle.getBoolean(Prefs.KEY_SHADE_WEATHER_OPENS_APP, Prefs.DEF_SHADE_WEATHER_OPENS_APP)
             s.perfTemp = bundle.getBoolean(Prefs.KEY_PERF_TEMP, Prefs.DEF_PERF_TEMP)
             s.perfFps = bundle.getBoolean(Prefs.KEY_PERF_FPS, Prefs.DEF_PERF_FPS)
             s.perfScale = Prefs.clamp(
@@ -1562,6 +1568,7 @@ class TrioSettings {
         s.shadeLunar = shadeLunar
         s.shadeWeather = shadeWeather
         s.shadeWeatherStyle = shadeWeatherStyle
+        s.shadeWeatherOpensApp = shadeWeatherOpensApp
         s.perfTemp = perfTemp
         s.perfFps = perfFps
         s.perfScale = perfScale
@@ -1715,6 +1722,7 @@ class TrioSettings {
             Prefs.KEY_SHADE_LUNAR -> shadeLunar = src.shadeLunar
             Prefs.KEY_SHADE_WEATHER -> shadeWeather = src.shadeWeather
             Prefs.KEY_SHADE_WEATHER_STYLE -> shadeWeatherStyle = src.shadeWeatherStyle
+            Prefs.KEY_SHADE_WEATHER_OPENS_APP -> shadeWeatherOpensApp = src.shadeWeatherOpensApp
             Prefs.KEY_PERF_TEMP -> perfTemp = src.perfTemp
             Prefs.KEY_PERF_FPS -> perfFps = src.perfFps
             Prefs.KEY_PERF_SCALE -> perfScale = src.perfScale
@@ -1866,6 +1874,7 @@ class TrioSettings {
         putBoolean(Prefs.KEY_SHADE_LUNAR, shadeLunar)
         putBoolean(Prefs.KEY_SHADE_WEATHER, shadeWeather)
         putInt(Prefs.KEY_SHADE_WEATHER_STYLE, shadeWeatherStyle)
+        putBoolean(Prefs.KEY_SHADE_WEATHER_OPENS_APP, shadeWeatherOpensApp)
         putBoolean(Prefs.KEY_PERF_TEMP, perfTemp)
         putBoolean(Prefs.KEY_PERF_FPS, perfFps)
         putInt(Prefs.KEY_PERF_SCALE, perfScale)
@@ -2008,6 +2017,7 @@ class TrioSettings {
             shadeLunar == other.shadeLunar &&
             shadeWeather == other.shadeWeather &&
             shadeWeatherStyle == other.shadeWeatherStyle &&
+            shadeWeatherOpensApp == other.shadeWeatherOpensApp &&
             perfTemp == other.perfTemp &&
             perfFps == other.perfFps &&
             perfScale == other.perfScale &&

@@ -321,6 +321,7 @@ class SettingsRepository(context: Context) {
     fun setShadeLunar(value: Boolean) = writeBoolean(Prefs.KEY_SHADE_LUNAR, value)
     fun setShadeWeather(value: Boolean) = writeBoolean(Prefs.KEY_SHADE_WEATHER, value)
     fun setShadeWeatherStyle(value: Int) = writeInt(Prefs.KEY_SHADE_WEATHER_STYLE, value)
+    fun setShadeWeatherOpensApp(value: Boolean) = writeBoolean(Prefs.KEY_SHADE_WEATHER_OPENS_APP, value)
     fun setColorClockWeatherOnDark(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_WEATHER_ON_DARK, value)
     fun setColorClockWeatherOnLight(value: Int) = writeInt(Prefs.KEY_COLOR_CLOCK_WEATHER_ON_LIGHT, value)
     /** Battery temperature in the out-of-ring strip - see [Prefs.KEY_PERF_TEMP]. */

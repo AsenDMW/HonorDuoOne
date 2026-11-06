@@ -275,6 +275,8 @@ internal object StatusBarRowManager {
             ),
         )
         row.glyph = glyph
+        // 布局完成后沿父链放开 clipChildren / clipToPadding，字形才能按设定尺寸完整显示。
+        glyph.post { unclipGlyph(glyph) }
     }
 
     private fun unmountGlyph(row: Row) {
@@ -917,9 +919,18 @@ internal object StatusBarRowManager {
         row.burnInIndex++
         val density = row.row.resources.displayMetrics.density
         val step = 1f * density
-        val views = listOfNotNull(row.glyph, row.signal, row.type, row.perf, row.fps)
+        // 字形走画布内平移（GlyphView.burnInDx/Dy + invalidate），不移动 View 本身，
+        // 避免被父链 clipChildren 裁切；其余外置组件仍用 translation，父链裁剪已由
+        // unclipGlyph 放开。
+        val glyph = row.glyph
+        if (glyph != null && glyph.parent === row.container) {
+            glyph.burnInDx = cell.first * step
+            glyph.burnInDy = cell.second * step
+            glyph.invalidate()
+        }
+        val others = listOfNotNull(row.signal, row.type, row.perf, row.fps)
         val p = row.container
-        for (v in views) {
+        for (v in others) {
             if (v.parent !== p) continue
             var dx = cell.first * step
             var dy = cell.second * step
@@ -937,12 +948,41 @@ internal object StatusBarRowManager {
     }
 
     fun resetBurnIn(row: Row) {
-        val views = listOfNotNull(row.glyph, row.signal, row.type, row.perf, row.fps)
+        row.glyph?.let { g ->
+            g.burnInDx = 0f
+            g.burnInDy = 0f
+            g.invalidate()
+        }
+        val views = listOfNotNull(row.signal, row.type, row.perf, row.fps)
         for (v in views) {
             if (v.parent === row.container) {
                 v.translationX = 0f
                 v.translationY = 0f
             }
+        }
+    }
+
+    /**
+     * 沿字形父链放开 clipChildren / clipToPadding。
+     *
+     * 状态栏图标行只有约 20dp 高，而字形可设到更大：按 View 实际高度绘制会被压小，
+     * 按设定尺寸绘制又会溢出 View 被 clipChildren 切掉。这里沿父链关掉裁剪，让字形
+     * 合法地画到行外（状态栏窗口本身足够高）。找到第一个能完整容纳字形的祖先就停。
+     */
+    fun unclipGlyph(glyph: View) {
+        val neededW = glyph.width.coerceAtLeast(1)
+        val neededH = (glyph as? io.github.odomu.honorduo.render.GlyphView)
+            ?.let { if (it.desiredHeight > 0) it.desiredHeight else glyph.height }
+            ?: glyph.height
+        var p: View? = glyph.parent as? View
+        var depth = 0
+        while (p != null && depth++ < 8) {
+            if (p is ViewGroup) {
+                if (p.clipChildren) p.clipChildren = false
+                if (p.clipToPadding) p.clipToPadding = false
+                if (p.width > 0 && p.height > 0 && p.width >= neededW && p.height >= neededH) return
+            }
+            p = p.parent as? View
         }
     }
 

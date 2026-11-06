@@ -60,7 +60,6 @@ internal class GlyphView(context: Context) : View(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val density = resources.displayMetrics.density
-        val offered = MeasureSpec.getSize(heightMeasureSpec)
         val nominal = (NOMINAL_HEIGHT_DP * density).roundToInt()
         val a = TrioConfig.appearance()
         val hasBottomStacked = !a.capsule && !a.rect && !a.dataSimOnly && (
@@ -74,8 +73,12 @@ internal class GlyphView(context: Context) : View(context) {
         } else {
             ((20.5f * density) + extraStackH).roundToInt()
         }
-        val height = if (offered > 0) minOf(offered, wanted) else wanted
-        val baseWidth = (height * TrioGeometry.hostAspect(a)).roundToInt()
+        // 字形始终按设定尺寸绘制，View 高度跟随宿主行高（resolveSize 让宿主压高时取宿主值）。
+        // 字形超出 View 的部分由 StatusBarRowManager.unclipGlyph 放开父链裁剪来显示——
+        // 否则「设置 24dp 反而比 20dp 还小」（此前 minOf(offered, wanted) 把字形压到行高）。
+        desiredHeight = wanted
+        val height = resolveSize(wanted, heightMeasureSpec)
+        val baseWidth = (wanted * TrioGeometry.hostAspect(a)).roundToInt()
         // Dynamically widen view as ring spacing widens to push sibling views and avoid clipping
         val extraSpacingW = if (a.ring && a.ringSpacingX > 0) (2f * a.ringSpacingX * density).roundToInt() else 0
         // While the pull-down morph runs, the row's width is the morph's width:
@@ -87,9 +90,10 @@ internal class GlyphView(context: Context) : View(context) {
         } else {
             1.coerceAtLeast(baseWidth + extraSpacingW)
         }
+        desiredWidth = if (morphNow && TrioRenderer.lastMorphWidthPx > 0) width else baseWidth + extraSpacingW
         setMeasuredDimension(
             resolveSize(width, widthMeasureSpec),
-            resolveSize(height, heightMeasureSpec),
+            height,
         )
     }
 
@@ -116,13 +120,20 @@ internal class GlyphView(context: Context) : View(context) {
         // translucent, so without this every repaint would stack a copy on the
         // last one.
         canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+        // 字形按设定尺寸（desiredWidth/Height）绘制，不随 View 实际大小收缩；
+        // 防烧屏位移走 canvas.translate（±1dp），不再移动 View 本身，避免被父链裁剪。
+        val drawW = if (desiredWidth > 0) desiredWidth else width
+        val drawH = if (desiredHeight > 0) desiredHeight else height
+        val save = canvas.save()
+        canvas.translate(burnInDx, burnInDy)
         TrioRenderer.drawInto(
-            canvas, width, height,
+            canvas, drawW, drawH,
             state.level, state.charging, state.quickCharging, state.powerSave, state.low,
             if (state.wifiPresent) state.wifiLevel else -1,
             state.mobileLevel, state.slotLevels, state.mobileType,
             state.foreground(), TrioConfig.get(), false,
         )
+        canvas.restoreToCount(save)
         // The morph's width is settled during the draw (only the frame knows
         // which pieces have ink), so the view catches up with it afterwards:
         // a disagreement wider than a pixel asks the row for a fresh measure.
@@ -161,6 +172,15 @@ internal class GlyphView(context: Context) : View(context) {
             boltExpiryPosted = false
         }
     }
+
+    /** 字形绘制宽度（设定尺寸），可能大于 View 宽度。 */
+    internal var desiredWidth = 0
+    /** 字形绘制高度（设定尺寸），可能大于 View 高度。 */
+    internal var desiredHeight = 0
+
+    /** 防烧屏画布内位移（px，±1dp），由 StatusBarRowManager 设置。 */
+    var burnInDx = 0f
+    var burnInDy = 0f
 
     /** 是否已经为闪电窗口的结束约过重绘。 */
     private var boltExpiryPosted = false

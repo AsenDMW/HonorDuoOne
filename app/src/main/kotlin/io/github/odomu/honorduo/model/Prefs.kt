@@ -906,6 +906,9 @@ object Prefs {
     /** How the shade weather reads: text, glyph or both - same ids as the clock's. */
     const val KEY_SHADE_WEATHER_STYLE = "shade_weather_style"
 
+    /** Tapping the shade's date line opens the system weather app instead of the clock. */
+    const val KEY_SHADE_WEATHER_OPENS_APP = "shade_weather_opens_app"
+
     /**
      * Hides the secondary SIM's (slot 2) signal icon from the status bar clusters.
      *
@@ -1359,6 +1362,7 @@ object Prefs {
     const val DEF_SHADE_LUNAR = false
     const val DEF_SHADE_WEATHER = false
     const val DEF_SHADE_WEATHER_STYLE = WEATHER_STYLE_TEXT
+    const val DEF_SHADE_WEATHER_OPENS_APP = true
 
     /** Off by default: the host's own icons and notifications are left untouched. */
     const val DEF_HIDE_SIM2 = false

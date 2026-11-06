@@ -10,6 +10,8 @@
 
 package io.github.odomu.honorduo.hook
 
+import android.content.Context
+import android.content.Intent
 import android.view.View
 import android.view.ViewParent
 import android.view.ViewTreeObserver
@@ -36,6 +38,8 @@ internal object ShadeHook {
     private const val CLS_NOTIF_BELL = "com.android.systemui.statusbar.notification.panelheader.NotifMgeBtn"
     private const val CLS_NOTIF_INTERACTOR =
         "com.android.systemui.statusbar.notification.panelheader.NotifCenterHeaderInteractorImpl"
+    private const val CLS_HEADER_VM =
+        "com.android.systemui.statusbar.notification.panelheader.NotifCenterHeaderViewModelImpl"
 
     private const val FIELD_POWER_BUTTON = "mPowerButton"
     private const val METHOD_CLOCK_DATE = "getCurrentClockDate"
@@ -48,6 +52,7 @@ internal object ShadeHook {
         n += hookPowerButton(module, cl)
         n += hookBell(module, cl)
         n += hookDateLine(module, cl)
+        n += hookDateClick(module, cl)
         return n
     }
 
@@ -173,11 +178,68 @@ internal object ShadeHook {
     }
 
     /**
+     * Hooks the click on the shade's date line.
+     *
+     * When [TrioAppearance.shadeWeatherOpensApp] is on, the tap opens the system
+     * weather app instead of the clock. The hook targets `onClickDate` on the
+     * notification header ViewModel, which is what the Compose date text calls.
+     */
+    private fun hookDateClick(module: XposedModule, cl: ClassLoader): Int {
+        val vm = Refl.cls(CLS_HEADER_VM, cl) ?: return 0
+        val onClickDate = TrioHooks.methodNamed(vm, "onClickDate", 0) ?: return 0
+        return TrioHooks.hook(module, onClickDate, "honorduo-shade-date-click") { chain ->
+            if (TrioConfig.appearance().shadeWeatherOpensApp) {
+                launchWeatherApp()
+                return@hook null
+            }
+            chain.proceed()
+        }
+    }
+
+    private const val HONOR_WEATHER_PKG = "com.hihonor.android.totemweather"
+
+    /**
+     * Opens the system weather app, dismissing the keyguard and shade.
+     *
+     * Tries the StatusBar's `startActivityDismissingKeyguard` first (the host's own
+     * pattern), which also collapses the shade; falls back to a plain startActivity.
+     */
+    private fun launchWeatherApp() {
+        val ctx = appContext() ?: return
+        val intent = ctx.packageManager.getLaunchIntentForPackage(HONOR_WEATHER_PKG)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            ?: run {
+                TrioHooks.log(TrioHooks.LOG_WARN, "shade weather: $HONOR_WEATHER_PKG not found")
+                return
+            }
+        if (!launchFromStatusBar(intent)) {
+            runCatching { ctx.startActivity(intent) }
+        }
+    }
+
+    private fun launchFromStatusBar(intent: Intent): Boolean {
+        val ctx = appContext() ?: return false
+        val loader = ctx.classLoader
+        val sb = Refl.cls("com.android.systemui.statusbar.phone.StatusBar", loader) ?: return false
+        val instance = runCatching { Refl.method(sb, "getInstance")?.invoke(null) }.getOrNull() ?: return false
+        val m = TrioHooks.methodNamed(instance.javaClass, "startActivityDismissingKeyguard", 1) ?: return false
+        return runCatching { m.invoke(instance, intent) }.isSuccess
+    }
+
+    /**
      * The weather in the chosen style. This line is plain text, so every icon style
      * ends up as the system's symbol: there is nothing here that can take a canvas.
+     *
+     * When no reading has landed yet the date line is the only thing that can ask for
+     * one: the manager backs a failed attempt off with its own stamp, so this costs at
+     * most one provider round-trip per cache window however often the line rebuilds.
      */
     private fun weatherText(): String {
-        val data = WeatherManager.data ?: return ""
+        val data = WeatherManager.data
+        if (data == null) {
+            appContext()?.let { WeatherManager.fetchAsync(it) }
+            return ""
+        }
         val style = TrioConfig.appearance().shadeWeatherStyle
         if (style == Prefs.WEATHER_STYLE_TEXT) return data.text()
         val glyph = WeatherIconDrawer.glyphFor(data.condition)
@@ -186,4 +248,43 @@ internal object ShadeHook {
             else -> "$glyph ${data.text()}"
         }
     }
+
+    /**
+     * Called by [WeatherManager] when a new reading lands: forces the shade's date
+     * line to recompute so the weather appears immediately instead of waiting for
+     * the next minute tick.
+     */
+    fun onWeatherChanged() {
+        refreshDateLine()
+    }
+
+    /** Recomputes the date line by nudging the host's TimeManager. */
+    private fun refreshDateLine() {
+        runCatching {
+            val manager = timeManager() ?: return@runCatching
+            TrioHooks.methodNamed(manager.javaClass, "updateNextTimeMinute", 1)?.invoke(manager, 0L)
+            TrioHooks.methodNamed(manager.javaClass, "updateNextTimeSecond", 1)?.invoke(manager, 0L)
+        }
+    }
+
+    @Volatile
+    private var sTimeManager: WeakReference<Any>? = null
+
+    private fun timeManager(): Any? {
+        sTimeManager?.get()?.let { return it }
+        val loader = appContext()?.classLoader ?: return null
+        val dependency = Refl.cls("com.android.systemui.plugins.Dependency", loader) ?: return null
+        val managerClass = Refl.cls("com.android.systemui.time.TimeManager", loader) ?: return null
+        val manager = runCatching {
+            Refl.method(dependency, "get", Class::class.java)?.invoke(null, managerClass)
+        }.getOrNull() ?: return null
+        sTimeManager = WeakReference(manager)
+        return manager
+    }
+
+    private fun appContext(): android.content.Context? = runCatching {
+        val at = Class.forName("android.app.ActivityThread")
+        val app = at.getMethod("currentApplication").invoke(null) as? android.app.Application
+        app?.applicationContext
+    }.getOrNull()
 }

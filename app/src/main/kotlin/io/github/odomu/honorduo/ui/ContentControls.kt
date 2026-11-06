@@ -199,6 +199,7 @@ internal enum class ContentControl(val owner: TrioSettingsPart) {
     ShadeLunar(TrioSettingsPart.Shade),
     ShadeWeather(TrioSettingsPart.Shade),
     ShadeWeatherStyle(TrioSettingsPart.Shade),
+    ShadeWeatherOpensApp(TrioSettingsPart.Shade),
     /**
      * 模块生效范围：控制中心 / 通知面板 / 锁屏界面里，哪些位置交给宿主。
      *
@@ -300,6 +301,7 @@ internal fun ContentControl.searchLabel(): ContentSearchLabel? = when (this) {
     ContentControl.ShadeLunar -> ContentSearchLabel(R.string.shade_lunar_title, R.string.shade_lunar_summary)
     ContentControl.ShadeWeather -> ContentSearchLabel(R.string.shade_weather_title, R.string.shade_weather_summary)
     ContentControl.ShadeWeatherStyle -> ContentSearchLabel(R.string.weather_style_title)
+    ContentControl.ShadeWeatherOpensApp -> ContentSearchLabel(R.string.shade_weather_opens_app_title, R.string.shade_weather_opens_app_summary)
 }
 
 @Composable
@@ -640,6 +642,13 @@ internal fun ContentControlRow(
                 dependencies = listOf(settings.shadeWeather to R.string.shade_weather_title),
             ) { value -> update { it.setShadeWeatherStyle(value) } }
         } else Unit
+        ContentControl.ShadeWeatherOpensApp -> ContentToggle(
+            checked = settings.shadeWeatherOpensApp,
+            title = R.string.shade_weather_opens_app_title,
+            summaryRes = R.string.shade_weather_opens_app_summary,
+            dependencies = listOf(settings.shadeWeather to R.string.shade_weather_title),
+            enabled = settings.enabled,
+        ) { value -> update { it.setShadeWeatherOpensApp(value) } }
         ContentControl.Power -> ContentToggle(settings.perfPower, R.string.perf_power_title, null, emptyList()) { value -> update { it.setPerfPower(value) } }
         ContentControl.RunningPower -> ContentToggle(checked = settings.perfRunning, title = R.string.perf_running_title, summaryRes = null,
             dependencies = listOf(settings.perfPower to R.string.perf_power_title)) { value -> update { it.setPerfRunning(value) } }

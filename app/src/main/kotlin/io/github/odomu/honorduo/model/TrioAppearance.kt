@@ -292,6 +292,9 @@ class TrioAppearance(c: TrioSettings) {
     /** Notification shade: text, glyph or both for that weather. */
     @JvmField val shadeWeatherStyle: Int = c.shadeWeatherStyle
 
+    /** Tapping the shade's date line opens the system weather app. */
+    @JvmField val shadeWeatherOpensApp: Boolean = c.shadeWeatherOpensApp
+
     /** The battery temperature is drawn in the same strip. */
     @JvmField val perfTemp: Boolean = c.perfTemp
 

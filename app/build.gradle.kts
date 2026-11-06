@@ -35,8 +35,19 @@ android {
         // 1.1.4（157）：移植 HonorDuo 1.0.7 的 af95135（农历分配跳过、FontMetrics 复用）
         // 与 7489aa8（时钟恢复加固：detached 检测、live 守卫、重试防死循环、stepBarClock
         // 自愈、横屏 transient 亮屏补放恢复）。
-        versionCode = tagVersionCode ?: 158
-        versionName = tagVersionName ?: "1.1.5"
+        // 1.1.5（158）：蓝牙电量正方环几何预烘焙（进度段 Path/字号/基线按
+        // 尺寸·电量·画法·字重缓存，onDraw 只重放；颜色与位置变化不触发重算）。
+        // 1.1.6（159）：通知中心天气修复（新增 query_home_city_weather call 查询
+        // 兜底 cursor；天气变化时通过 TimeManager 强制刷新日期行）；
+        // 补 META-INF/xposed/scope.list 使 LSPosed 显示推荐作用域。
+        // 1.1.7（160）：搬 HonorDuoBar 1.3.3 字形裁切修复——字形始终按设定尺寸绘制
+        // （不再随行高收缩），沿父链放开 clipChildren/clipToPadding；防烧屏位移改
+        // 画布内 canvas.translate，不再移动 View 本身。
+        // 1.1.8（161）：通知中心日期行点击跳转系统天气 App（搬 HonorDuo 1.0.7
+        // hookDateClick，包名 com.hihonor.android.totemweather，走 StatusBar
+        // startActivityDismissingKeyguard 收起通知栏）；新增设置开关。
+        versionCode = tagVersionCode ?: 161
+        versionName = tagVersionName ?: "1.1.8"
 
         buildConfigField("String", "REPO_SLUG", "\"$repoSlug\"")
     }

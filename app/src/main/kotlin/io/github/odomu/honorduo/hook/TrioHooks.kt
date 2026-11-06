@@ -50,6 +50,9 @@ internal object TrioHooks {
 
     fun install(module: XposedModule, cl: ClassLoader) {
         sModule = module
+        // 诊断快照在这之后采集：hook 安装结果、堆叠探测、本轮日志都会写进
+        // 远端偏好，设置页的「诊断信息」直接读它。
+        HookReport.attach(module)
         TrioConfig.install(module)
         // 设置改动不热应用：改完（含恢复备份）需要重启 SystemUI 才生效。
         // 这里刻意不 addListener，TrioConfig 也只在进程启动时读一次。
@@ -74,6 +77,7 @@ internal object TrioHooks {
             module,
             "HonorDuo installed, hooks=$hooked enabled=${TrioConfig.get().enabled}",
         )
+        HookReport.finish()
     }
 
     private fun applyConfigChange() {
@@ -177,9 +181,12 @@ internal object TrioHooks {
         hooker: XposedInterface.Hooker,
     ): Int {
         if (m == null) {
-            log(module, "skip $id: method not found")
+            val reason = HookReport.missingReason()
+            log(module, "skip $id: method not found ($reason)")
+            HookReport.record(id, "", false, reason)
             return 0
         }
+        val target = "${m.declaringClass.name}#${m.name}"
         return try {
             module.hook(m).setId(id).intercept { chain ->
                 // 模块总开关是真正的「全部功能失效」闸门：关闭时所有 hook 一律透传，
@@ -190,24 +197,33 @@ internal object TrioHooks {
                     hooker.intercept(chain)
                 }
             }
+            HookReport.record(id, target, true)
             1
         } catch (t: Throwable) {
             log(module, "skip $id: $t")
+            HookReport.record(id, target, false, "挂载异常：${t.javaClass.simpleName}: ${t.message}")
             0
         }
     }
 
     fun methodNamed(c: Class<*>?, name: String, arity: Int): Method? {
-        if (c == null) return null
-        return try {
-            c.declaredMethods.firstOrNull { it.name == name && it.parameterTypes.size == arity }
-                ?.also { it.isAccessible = true }
-        } catch (ignored: Throwable) {
+        val found = if (c == null) {
             null
+        } else {
+            try {
+                c.declaredMethods.firstOrNull { it.name == name && it.parameterTypes.size == arity }
+                    ?.also { it.isAccessible = true }
+            } catch (ignored: Throwable) {
+                null
+            }
         }
+        // 记下这次查找：hook() 没拿到方法时据此区分「类不存在」与「签名不匹配」。
+        HookReport.noteMethod(c?.name, name, arity, found != null)
+        return found
     }
 
     fun log(module: XposedModule, msg: String) {
+        HookReport.appendLog(msg)
         try {
             module.log(LOG_INFO, TAG, msg)
         } catch (ignored: Throwable) {
@@ -217,6 +233,7 @@ internal object TrioHooks {
 
     /** Logs through the handle captured at install time. */
     fun log(priority: Int, msg: String) {
+        HookReport.appendLog(msg)
         val module = sModule ?: return
         try {
             module.log(priority, TAG, msg)

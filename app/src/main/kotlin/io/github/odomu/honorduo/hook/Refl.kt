@@ -24,10 +24,15 @@ import java.lang.reflect.Method
 internal object Refl {
 
     @JvmStatic
-    fun cls(name: String, cl: ClassLoader): Class<*>? = try {
-        Class.forName(name, false, cl)
-    } catch (_: Throwable) {
-        null
+    fun cls(name: String, cl: ClassLoader): Class<*>? {
+        val c = try {
+            Class.forName(name, false, cl)
+        } catch (_: Throwable) {
+            null
+        }
+        // 记下来，诊断页才能说清是「类不存在」还是「方法签名不匹配」。
+        HookReport.noteClass(name, c != null)
+        return c
     }
 
     /** The field declared on [c] or any superclass, made accessible. */
@@ -46,12 +51,17 @@ internal object Refl {
 
     @JvmStatic
     fun method(c: Class<*>?, name: String, vararg sig: Class<*>): Method? {
-        if (c == null) return null
-        return try {
+        if (c == null) {
+            HookReport.noteMethod(null, name, sig.size, false)
+            return null
+        }
+        val found = try {
             c.getDeclaredMethod(name, *sig).also { it.isAccessible = true }
         } catch (_: Throwable) {
             null
         }
+        HookReport.noteMethod(c.name, name, sig.size, found != null)
+        return found
     }
 
     @JvmStatic
@@ -59,11 +69,14 @@ internal object Refl {
         var k: Class<*>? = c
         while (k != null && k != Any::class.java) {
             try {
-                return k.getDeclaredMethod(name, *sig).also { it.isAccessible = true }
+                val found = k.getDeclaredMethod(name, *sig).also { it.isAccessible = true }
+                HookReport.noteMethod(k.name, name, sig.size, true)
+                return found
             } catch (_: Throwable) {
                 k = k.superclass
             }
         }
+        HookReport.noteMethod(c?.name, name, sig.size, false)
         return null
     }
 

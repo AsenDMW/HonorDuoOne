@@ -12,6 +12,8 @@
 package io.github.odomu.honorduo.ui
 
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -136,7 +138,9 @@ import io.github.odomu.honorduo.R
 import io.github.odomu.honorduo.model.Prefs
 import io.github.odomu.honorduo.model.TrioAppearance
 import io.github.odomu.honorduo.model.TrioSettings
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -190,7 +194,7 @@ internal val SettingsItemMargin = PaddingValues(horizontal = 18.dp, vertical = 8
  * of the card edge.
  */
 @Composable
-private fun SectionTitle(title: String) {
+internal fun SectionTitle(title: String) {
     SmallTitle(
         text = title,
         modifier = Modifier.padding(top = 4.dp),
@@ -291,6 +295,13 @@ fun SettingsScreen(repository: SettingsRepository) {
     val pageStateHolder = rememberSaveableStateHolder()
     BackHandler(enabled = nav.backStack.size > 1) { nav.pop() }
 
+    // 诊断页是挂在「关于」页下面的一层，不占新的导航路由：返回键、切换 Tab 都能
+    // 直接退出，页面级状态（滚动位置）也不必再序列化一份。
+    var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
+    var diagnosticsData by remember { mutableStateOf<DiagnosticsData?>(null) }
+    // 后声明的 BackHandler 优先级更高，诊断页开着时先把这一层关掉。
+    BackHandler(enabled = diagnosticsOpen) { diagnosticsOpen = false }
+
     // The framework service can bind or die at any moment; both the status row
     // and every remote write have to follow it.
     DisposableEffect(repository) {
@@ -320,6 +331,7 @@ fun SettingsScreen(repository: SettingsRepository) {
     // section further down walks back to it instead of pushing it again, so the
     // stack stays a path through the page rather than a log of every tap.
     fun selectTab(next: SettingsTab) {
+        diagnosticsOpen = false
         val backStack = nav.backStack
         if (backStack.lastOrNull() == next.route) return
         if (backStack.contains(next.route)) {
@@ -410,6 +422,61 @@ fun SettingsScreen(repository: SettingsRepository) {
             }.onFailure {
                 showMessage(backupContext.getString(R.string.backup_import_failed))
             }
+        }
+    }
+
+    // ---- 诊断信息 ----
+    // 打开时才采集：设备信息读一次 PackageManager，hook 快照读一次 SystemUI 进程
+    // 写下的 prefs 文件，都不进日常路径。
+    val diagContext = LocalContext.current
+    val diagnostics = remember(diagContext, service) { ModuleDiagnostics(diagContext, service) }
+    var diagExportText by remember { mutableStateOf<String?>(null) }
+    val diagCopyDone = stringResource(R.string.diag_copy_done)
+    val diagExportDone = stringResource(R.string.diag_export_done)
+    val diagExportFailed = stringResource(R.string.diag_export_failed)
+
+    LaunchedEffect(diagnosticsOpen, diagnostics) {
+        if (diagnosticsOpen) {
+            diagnosticsData = withContext(Dispatchers.IO) { diagnostics.collect() }
+        }
+    }
+
+    val diagExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = diagExportText
+        diagExportText = null
+        scope.launch {
+            runCatching {
+                diagContext.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(text.orEmpty().toByteArray(Charsets.UTF_8))
+                }
+                showMessage(diagExportDone)
+            }.onFailure {
+                showMessage(diagExportFailed)
+            }
+        }
+    }
+    val copyDiagnostics: () -> Unit = {
+        scope.launch {
+            val data = diagnosticsData ?: withContext(Dispatchers.IO) { diagnostics.collect() }
+            val text = withContext(Dispatchers.IO) { diagnostics.exportText(data) }
+            diagContext.getSystemService(ClipboardManager::class.java)
+                ?.setPrimaryClip(ClipData.newPlainText("Honor Duo One diagnostics", text))
+            showMessage(diagCopyDone)
+        }
+    }
+    val exportDiagnostics: () -> Unit = {
+        scope.launch {
+            val data = diagnosticsData ?: withContext(Dispatchers.IO) { diagnostics.collect() }
+            diagExportText = withContext(Dispatchers.IO) { diagnostics.exportText(data) }
+            diagExportLauncher.launch("honorduo-diagnostics.txt")
+        }
+    }
+    val reloadDiagnostics: () -> Unit = {
+        scope.launch {
+            diagnosticsData = withContext(Dispatchers.IO) { diagnostics.collect() }
         }
     }
 
@@ -529,6 +596,11 @@ fun SettingsScreen(repository: SettingsRepository) {
                                 restarter.reset()
                                 restarting = true
                             },
+                            titleOverride = if (currentTab == SettingsTab.About && diagnosticsOpen) {
+                                R.string.diag_title
+                            } else {
+                                null
+                            },
                         ) {
                             when (currentTab) {
                                 SettingsTab.Layout -> drawingTab(
@@ -555,19 +627,29 @@ fun SettingsScreen(repository: SettingsRepository) {
                                     },
                                 )
 
-                                SettingsTab.About -> aboutTab(
-                                    settingsState.value, serviceState.value,
-                                    installingFont = installingFont,
-                                    onChooseFont = { fontPicker.launch(arrayOf("*/*")) },
-                                    onClearFont = { fontPath ->
-                                        update { it.setFontPath("") }
-                                        scope.launch { FontInstaller.remove(fontPath) }
-                                    },
-                                    onExportBackup = {
-                                        exportLauncher.launch("honorduo_backup_${System.currentTimeMillis()}.json")
-                                    },
-                                    onImportBackup = { importLauncher.launch(arrayOf("application/json", "*/*")) },
-                                ) { block -> update(block) }
+                                SettingsTab.About -> if (diagnosticsOpen) {
+                                    diagnosticsTab(
+                                        data = diagnosticsData,
+                                        onCopy = copyDiagnostics,
+                                        onExport = exportDiagnostics,
+                                        onReload = reloadDiagnostics,
+                                    )
+                                } else {
+                                    aboutTab(
+                                        settingsState.value, serviceState.value,
+                                        installingFont = installingFont,
+                                        onChooseFont = { fontPicker.launch(arrayOf("*/*")) },
+                                        onClearFont = { fontPath ->
+                                            update { it.setFontPath("") }
+                                            scope.launch { FontInstaller.remove(fontPath) }
+                                        },
+                                        onExportBackup = {
+                                            exportLauncher.launch("honorduo_backup_${System.currentTimeMillis()}.json")
+                                        },
+                                        onImportBackup = { importLauncher.launch(arrayOf("application/json", "*/*")) },
+                                        onOpenDiagnostics = { diagnosticsOpen = true },
+                                    ) { block -> update(block) }
+                                }
                             }
                         }
                     }
@@ -680,6 +762,7 @@ private fun SettingsPage(
     isTop: Boolean,
     bottomPadding: Dp,
     onRestart: () -> Unit,
+    titleOverride: Int? = null,
     content: LazyListScope.() -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
@@ -690,7 +773,7 @@ private fun SettingsPage(
         }
     }
     val pageTitle = stringResource(
-        when (tab) {
+        titleOverride ?: when (tab) {
             SettingsTab.Layout -> R.string.tab_layout
             SettingsTab.Settings -> R.string.tab_settings
             SettingsTab.About -> R.string.about_title
@@ -1750,6 +1833,7 @@ private fun LazyListScope.aboutTab(
     onClearFont: (String) -> Unit,
     onExportBackup: () -> Unit,
     onImportBackup: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
     update: ((SettingsRepository) -> Unit) -> Unit,
 ) {
     item { ActivatedRow(settings = settings, service = service, update = update) }
@@ -1780,6 +1864,17 @@ private fun LazyListScope.aboutTab(
     }
     item { SectionTitle(stringResource(R.string.group_launcher_icon)) }
     item { LauncherIconCard() }
+    item { SectionTitle(stringResource(R.string.group_diagnostics)) }
+    item {
+        Card {
+            ArrowPreference(
+                title = stringResource(R.string.diag_entry_title),
+                summary = stringResource(R.string.diag_entry_summary),
+                insideMargin = SettingsItemMargin,
+                onClick = onOpenDiagnostics,
+            )
+        }
+    }
     item { SectionTitle(stringResource(R.string.group_debug)) }
     item {
         Card {
@@ -1876,7 +1971,7 @@ private fun LazyListScope.aboutTab(
  * to wrap without a second column squeezing them.
  */
 @Composable
-private fun InfoRow(label: String, value: String, bottomPadding: Dp = 24.dp) {
+internal fun InfoRow(label: String, value: String, bottomPadding: Dp = 24.dp) {
     Text(
         text = label,
         style = MiuixTheme.textStyles.headline1,

@@ -83,7 +83,7 @@ internal object StackedSignalHook {
     private const val RES_ALIAS_SUFFIX = "_res_0x[0-9a-fA-F]+$"
 
     private val bitmapCache = HashMap<String, Bitmap>()
-    private val missing = HashSet<String>()
+    private val missing: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     private val nameCache = HashMap<Int, String?>()
     private val applied = WeakHashMap<ImageView, Bitmap>()
     private val appliedName = WeakHashMap<ImageView, String?>()
@@ -110,6 +110,14 @@ internal object StackedSignalHook {
     private var sRefLineSpacing = 0f
     private var sAppliedDensity = 0
     private var sTypeW = 0
+
+    /** 诊断计数：命中来源与未命中次数，只在 [statsLines] 里读取。 */
+    @Volatile
+    private var sHitEmbedded = 0
+    @Volatile
+    private var sHitTheme = 0
+    @Volatile
+    private var sMissName = 0
 
     private var sModuleApk: String? = null
     private var sThemeZip: ZipFile? = null
@@ -144,6 +152,8 @@ internal object StackedSignalHook {
         // 不用「同名 + 参数个数」去猜，避免在重载里挑错方法。
         val hwImageView = Refl.cls("com.hihonor.uikit.phone.hwimageview.widget.HwImageView", cl)
 
+        probeEnvironment(signalCluster, listener, hwCluster, hwImageView)
+
         var hooked = 0
         hooked += hookIcon(
             module,
@@ -171,6 +181,55 @@ internal object StackedSignalHook {
         TrioHooks.log(module, "StackedSignal installed, hooks=$hooked apk=$sModuleApk")
     }
 
+    /**
+     * 诊断用的一次性探测：目标类在不在、主题包里有没有资源、内置 PNG 有多少张。
+     * 只在安装时跑一遍，日常绘制不受影响。
+     */
+    private fun probeEnvironment(
+        signalCluster: Class<*>?,
+        listener: Class<*>?,
+        hwCluster: Class<*>?,
+        hwImageView: Class<*>?,
+    ) {
+        fun mark(label: String, present: Boolean) {
+            HookReport.addStacked("$label=${if (present) "存在" else "缺失"}")
+        }
+        mark("SignalClusterView", signalCluster != null)
+        mark("SignalClusterView\$2", listener != null)
+        mark("HwSignalClusterView", hwCluster != null)
+        mark("HwImageView", hwImageView != null)
+
+        val theme = File(THEME_ZIP)
+        HookReport.addStacked(
+            "主题包 $THEME_ZIP=${if (theme.canRead()) "可读 ${theme.length()} 字节" else "不可读"}",
+        )
+
+        val assets = try {
+            val apk = sModuleApk
+            if (apk == null) {
+                -1
+            } else {
+                ZipFile(File(apk)).use { zip ->
+                    zip.entries().asSequence().count { it.name.startsWith(ASSET_DIR) && it.name.endsWith(".png") }
+                }
+            }
+        } catch (_: Throwable) {
+            -1
+        }
+        HookReport.addStacked("内置 stacked PNG=$assets")
+    }
+
+    /** 运行期资源命中统计，由 [HookReport] 在落盘时追加到诊断快照里。 */
+    fun statsLines(): List<String> {
+        val lines = ArrayList<String>(3)
+        lines.add("图标命中=内置 $sHitEmbedded 次 / 主题包 $sHitTheme 次")
+        lines.add("名称未匹配=$sMissName 次，资源缺失=${missing.size} 个")
+        if (missing.isNotEmpty()) {
+            lines.add("缺失示例=" + missing.take(5).joinToString(", "))
+        }
+        return lines
+    }
+
     private fun hookIcon(
         module: XposedModule,
         c: Class<*>?,
@@ -181,11 +240,27 @@ internal object StackedSignalHook {
         // 这里保持同样的结果。
         if (types.any { it == null }) {
             TrioHooks.log(module, "stacked skip $who.setIconForView: parameter class missing")
+            HookReport.record(
+                "stacked:$who.setIconForView",
+                c?.name ?: who,
+                false,
+                "参数类缺失：HwImageView 未找到",
+            )
             return 0
         }
         val m = methodNamed(c, "setIconForView", types)
         if (m == null) {
             TrioHooks.log(module, "stacked skip $who.setIconForView: method not found")
+            HookReport.record(
+                "stacked:$who.setIconForView",
+                c?.name ?: who,
+                false,
+                if (c == null) {
+                    "类不存在：$who"
+                } else {
+                    "方法签名不匹配：${c.name}#setIconForView(2 个参数)"
+                },
+            )
             return 0
         }
         return try {
@@ -210,9 +285,16 @@ internal object StackedSignalHook {
                 }
                 result
             }
+            HookReport.record("stacked:$who.setIconForView", "${m.declaringClass.name}#setIconForView", true)
             1
         } catch (t: Throwable) {
             TrioHooks.log(module, "stacked skip $who.setIconForView: $t")
+            HookReport.record(
+                "stacked:$who.setIconForView",
+                "${m.declaringClass.name}#setIconForView",
+                false,
+                "挂载异常：${t.javaClass.simpleName}: ${t.message}",
+            )
             0
         }
     }
@@ -226,11 +308,27 @@ internal object StackedSignalHook {
     ): Int {
         if (types.any { it == null }) {
             TrioHooks.log(module, "stacked skip ${c?.simpleName}.$name: parameter class missing")
+            HookReport.record(
+                "stacked:$name",
+                c?.name ?: tag,
+                false,
+                "参数类缺失：${name}(${types.size} 个参数)",
+            )
             return 0
         }
         val m = methodNamed(c, name, types)
         if (m == null) {
             TrioHooks.log(module, "stacked skip ${c?.simpleName}.$name: method not found")
+            HookReport.record(
+                "stacked:$name",
+                c?.name ?: tag,
+                false,
+                if (c == null) {
+                    "类不存在：$tag"
+                } else {
+                    "方法签名不匹配：${c.name}#$name(${types.size} 个参数)"
+                },
+            )
             return 0
         }
         return try {
@@ -244,9 +342,16 @@ internal object StackedSignalHook {
                 }
                 result
             }
+            HookReport.record("stacked:$name", "${m.declaringClass.name}#$name", true)
             1
         } catch (t: Throwable) {
             TrioHooks.log(module, "stacked skip ${c?.simpleName}.$name: $t")
+            HookReport.record(
+                "stacked:$name",
+                "${m.declaringClass.name}#$name",
+                false,
+                "挂载异常：${t.javaClass.simpleName}: ${t.message}",
+            )
             0
         }
     }
@@ -277,7 +382,11 @@ internal object StackedSignalHook {
         val unit = unitOf(v, group) ?: return false
         if (!isUctUnit(unit)) return false
         val res = v.resources ?: return false
-        val name = stackedName(res, id) ?: return false
+        val name = stackedName(res, id)
+        if (name == null) {
+            sMissName++
+            return false
+        }
 
         if (isOurs(v) &&
             name == appliedName[v] &&
@@ -324,8 +433,13 @@ internal object StackedSignalHook {
 
     private fun loadBitmap(res: Resources, name: String): Bitmap? {
         val embedded = loadEmbedded(name)
-        if (embedded != null) return decodePng(embedded, "embedded:$name")
-        return loadFromTheme(res, name)
+        if (embedded != null) {
+            sHitEmbedded++
+            return decodePng(embedded, "embedded:$name")
+        }
+        val themed = loadFromTheme(res, name)
+        if (themed != null) sHitTheme++
+        return themed
     }
 
     /**

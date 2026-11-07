@@ -12,11 +12,16 @@
 package io.github.odomu.honorduo.model
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.telephony.SubscriptionInfo
 import android.telephony.SubscriptionManager
@@ -33,6 +38,7 @@ import io.github.odomu.honorduo.hook.WifiPresence
 import io.github.odomu.honorduo.hook.WeatherManager
 import io.github.odomu.honorduo.model.TrioState.Companion.SIMS_INTERVAL_MS
 import java.lang.reflect.Field
+import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -151,13 +157,8 @@ internal class TrioState(val host: View) {
 
         resolvePending(resourcesOf(host))
 
-        // One telephony poll is enough for every host, so it is rate-limited here rather than expressed as a background subscription no host owns.
-        if (TrioConfig.get().dualSim || TrioConfig.appearance().drawsAnySimRow() ||
-            TrioConfig.appearance().stackedOut() || TrioConfig.appearance().ownsType() ||
-            sMobileLevel < 0
-        ) {
-            sampleSimsIfDue()
-        }
+        // 卡状态与信号由主线程的 2 秒采样器和卡状态广播更新；refresh 只读已发布的
+        // 数组，onDraw 里不做 SubscriptionManager / getSimState / 反射调用。
 
         wifiLevel = sWifiLevel
         wifiLevel5 = sWifiLevel5
@@ -171,6 +172,18 @@ internal class TrioState(val host: View) {
         wifiTrafficUp = sWifiTrafficUp
         wifiTrafficDown = sWifiTrafficDown
         mobileLevel = sMobileLevel
+        // 在位的卡全部停用：总信号不再沿用停用前的旧读数，按 0（整排轨道色）显示。
+        if (sSlotPolled) {
+            var anyPresent = false
+            var anyEnabled = false
+            for (i in 0 until SIM_SLOTS) {
+                if (sSlotPresent.getOrNull(i) == true) {
+                    anyPresent = true
+                    if (sSlotDisabled.getOrNull(i) != true) anyEnabled = true
+                }
+            }
+            if (anyPresent && !anyEnabled) mobileLevel = 0
+        }
         wifiPresent = sWifiPresent
         // 制式以电话读数（含关 5G 后的全局降级）为准。图标名会把「5G 可用」
         // 直接报成 5G，关掉 5G 后也不回落——之前一直显示 5G 的真正原因。
@@ -187,8 +200,18 @@ internal class TrioState(val host: View) {
         }
 
         val slots = sSlotLevels
-        slotLevels[0] = slots[0]
-        slotLevels[1] = slots[1]
+        val last = sSlotLastLevels
+        for (i in 0 until SIM_SLOTS) {
+            // 每槽的显示读数：停用排固定 0（整排轨道色）；本帧读不到就先用这张卡
+            // 自己的历史读数，再退回总信号。停用槽不参与任何借数。
+            slotLevels[i] = when {
+                sSlotDisabled.getOrNull(i) == true -> 0
+                sSlotPresent.getOrNull(i) != true -> -1
+                (slots.getOrNull(i) ?: -1) >= 0 -> slots[i]
+                (last.getOrNull(i) ?: -1) >= 0 -> last[i]
+                else -> -1
+            }
+        }
         sims = (if (slots[0] >= 0) 1 else 0) + (if (slots[1] >= 0) 1 else 0)
 
         // Single row, no answer from the icon chain: the row still means "the SIM
@@ -485,7 +508,37 @@ internal class TrioState(val host: View) {
          */
         @Volatile
         @JvmField
-        var sSlotPresent = booleanArrayOf(false, false)
+        var sSlotPresent = booleanArrayOf(true, true)
+
+        /**
+         * 这张卡是否被停用（设置在 SIM 卡管理里关掉）。
+         *
+         * 三态里的第三态：在位不等于启用。停用排保留位置与行高，只把整排点换成
+         * 轨道色，所以渲染只要读这个标志，不必区分「停用」和「信号为零」。
+         */
+        @Volatile
+        @JvmField
+        var sSlotDisabled = booleanArrayOf(false, false)
+
+        /**
+         * 每张卡最近一次真实读数（只记 >=0 的值，停用/读不到时保留旧值）。
+         *
+         * 这一帧某个启用槽读不到信号时先借这张卡自己的历史值，再借总信号：
+         * 既不会因为一次读取失败画灰，也不会把另一张卡的亮度借过来。
+         */
+        @Volatile
+        @JvmField
+        var sSlotLastLevels = intArrayOf(-1, -1)
+
+        /** 「在位但不在 active 卡表」连续成立的采样次数；连续两拍才确证停用。 */
+        private var sSlotAbsentStreak = intArrayOf(0, 0)
+
+        /** 「卡表为空但卡在位」连续成立的采样次数；连续两拍才判「全部停用」。 */
+        private var sAllInactiveStreak = 0
+
+        /** `SubscriptionInfo#areUiccApplicationsEnabled()`，只解析一次。 */
+        private var uiccMethod: Method? = null
+        private var uiccTried = false
 
         /** The default-data SIM's slot, or -1 when unknown. */
         @Volatile
@@ -502,6 +555,17 @@ internal class TrioState(val host: View) {
         fun slotPresent(slot: Int): Boolean {
             if (!sSlotPolled) return true
             return sSlotPresent.getOrNull(slot) == true
+        }
+
+        /**
+         * 这个卡槽是否被停用；卡槽本来就不在时一律 false。
+         *
+         * 与 [slotPresent] 一样只读已发布的数组，绘制热路径可以直接调用。
+         */
+        @JvmStatic
+        fun slotDisabled(slot: Int): Boolean {
+            if (!sSlotPolled) return false
+            return sSlotDisabled.getOrNull(slot) == true
         }
 
         private const val WHITE = 0xFFFFFFFF.toInt()
@@ -533,9 +597,6 @@ internal class TrioState(val host: View) {
 
         @Volatile
         private var sLastInk = ""
-
-        @Volatile
-        private var sSimsDueAt = 0L
 
         // Battery manager (com.android.systemui.battery.HwBatteryManager).
         private var mgrGetInstance: java.lang.reflect.Method? = null
@@ -588,6 +649,10 @@ internal class TrioState(val host: View) {
                 FpsTicker.start(app)
                 startDataActivityListener(app)
                 startDataActivitySampler(app)
+                // 卡状态变化（拔插、停用/启用、切默认卡）没有事件就不会自己更新：
+                // 2 秒采样是兜底，广播才是及时刷新的来源。
+                startSimStateListener(app)
+                startSimSampler(app)
             } catch (_: Throwable) {
                 // Leave it null; the reading stays on the single-row fallback.
             }
@@ -782,18 +847,48 @@ internal class TrioState(val host: View) {
             null
         }
 
+        private var sSimSampler = false
+
+        /** 亮屏或设置变更后重新拉起 2 秒卡状态采样（幂等）。 */
+        @JvmStatic
+        fun ensureSimSampler() {
+            val ctx = appContext() ?: return
+            try {
+                startSimSampler(ctx)
+            } catch (_: Throwable) {
+            }
+        }
+
         /**
-         * Re-reads the per-SIM levels at most once every [SIMS_INTERVAL_MS].
+         * 主线程 2 秒采样循环：不在任何绘制路径里，熄屏自动停摆。
          *
-         * Called from [refresh], which runs in onDraw: the guard is what keeps a
-         * per-frame call from becoming a per-frame IPC.
+         * 只有读数真的变了才重画，避免每 2 秒白白刷一次状态栏。
          */
-        private fun sampleSimsIfDue() {
-            if (!ScreenStateTracker.isScreenOn) return
-            val now = SystemClock.elapsedRealtime()
-            if (now < sSimsDueAt) return
-            sSimsDueAt = now + SIMS_INTERVAL_MS
-            sampleSims(appContext())
+        private fun startSimSampler(context: Context) {
+            if (sSimSampler) return
+            if (ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.READ_PHONE_STATE,
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            sSimSampler = true
+            val main = Handler(Looper.getMainLooper())
+            val tick = object : Runnable {
+                override fun run() {
+                    if (!ScreenStateTracker.isScreenOn) {
+                        sSimSampler = false
+                        return
+                    }
+                    try {
+                        if (sampleSims(appContext())) TrioHooks.invalidateHosts()
+                    } catch (_: Throwable) {
+                    }
+                    main.postDelayed(this, SIMS_INTERVAL_MS)
+                }
+            }
+            main.postDelayed(tick, 0L)
         }
 
         /**
@@ -806,34 +901,54 @@ internal class TrioState(val host: View) {
          * Every step is defensive: a missing permission or a dead radio leaves that slot
          * at -1 and the caller falls back to a single row.
          */
-        private fun sampleSims(source: Context?) {
-            val context = source ?: return
+        private fun sampleSims(source: Context?): Boolean {
+            val context = source ?: return false
             if (ContextCompat.checkSelfPermission(
                     context,
                     Manifest.permission.READ_PHONE_STATE,
                 ) != PackageManager.PERMISSION_GRANTED
             ) {
-                return
+                return false
             }
             val levels = intArrayOf(-1, -1)
             val present = booleanArrayOf(false, false)
+            val disabled = booleanArrayOf(false, false)
             var dataSlot = -1
+            var lastNext: IntArray? = null
             try {
                 val subs = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
                         as? SubscriptionManager
                 val tel = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-                if (subs == null || tel == null) return
+                if (subs == null || tel == null) return false
                 // 卡表读不到（没权限/服务异常）就整帧不发布：否则一次失败会把两个卡槽
                 // 都记成「没卡」，点阵从此不显示。
-                val active = subs.activeSubscriptionInfoList ?: return
+                val active = subs.activeSubscriptionInfoList ?: return false
+                // 物理状态每槽问一次。UNKNOWN 是读取失败，原样保留上一帧的在位判断；
+                // NOT_READY 是停用卡最常见的样子，也算在位。
+                val states = intArrayOf(0, 0)
+                val inserted = booleanArrayOf(false, false)
+                var insertedCount = 0
+                for (slot in 0 until SIM_SLOTS) {
+                    val state = simState(tel, slot)
+                    states[slot] = state
+                    inserted[slot] = state != TelephonyManager.SIM_STATE_ABSENT &&
+                        state != TelephonyManager.SIM_STATE_UNKNOWN
+                    if (inserted[slot]) insertedCount++
+                }
+                val activeSlots = booleanArrayOf(false, false)
+                // 1 = 启用，0 = 停用，-1 = 读不到。
+                val uicc = intArrayOf(-1, -1)
                 val dataSubId = SubscriptionManager.getDefaultDataSubscriptionId()
                 active.forEach { info ->
                     val subId = info.subscriptionId
+                    // 槽位只认 SubscriptionInfo.simSlotIndex，不按列表顺序推：
+                    // 停用或切默认卡后列表顺序会变，按顺序推就会把两张卡画反。
                     val slot = info.simSlotIndex
                     if (subId == dataSubId) dataSlot = slot
                     if (slot in 0 until SIM_SLOTS) {
-                        present[slot] = true
+                        activeSlots[slot] = true
                         levels[slot] = levelOf(tel, subId)
+                        uicc[slot] = uiccEnabled(info)
                         // The radio decides the family; the icon only refines it, and is replaced when stale.
                         // The ROM's own per-slot answer first: it already folded in the
                         // NSA override, and it is the value its icon was chosen from.
@@ -847,21 +962,128 @@ internal class TrioState(val host: View) {
                         }
                     }
                 }
+                // 空卡表且一个槽都读不到在位：这是「未知」（权限/服务/开机瞬态），
+                // 保留上一帧，绝不发布全灰。两个槽都明确 ABSENT 才是真没卡。
+                if (active.isEmpty() && insertedCount == 0) {
+                    val noCard = states[0] == TelephonyManager.SIM_STATE_ABSENT &&
+                        states[1] == TelephonyManager.SIM_STATE_ABSENT
+                    if (!noCard) return false
+                }
+                // 停用判据，按可信度从高到低：
+                // 1. 卡表里重新出现该槽 → 系统明确启用；
+                // 2. 有订阅记录（可用卡表）却不在 active 表 → 明确停用；
+                // 3. 在位且明确缺席 active 表，连续两拍 → 停用（UNKNOWN 不算）；
+                // 4. 都不是 → 保留上一帧的结论（粘性：抖动、空表、广播延迟都不翻回启用）。
+                // 反射只在「至少一张卡明确报启用」时才可信：1.1.12 里它可能对所有正常
+                // 卡都返回 false，那种情况整批不信，避免重现全灰。
+                val crossCheckTrue = uicc[0] == 1 || uicc[1] == 1
+                val evidence = activeSlots[0] || activeSlots[1]
+                // 两张卡都停用时卡表是空的：把所有在位槽都判成停用，但要求连续两拍，
+                // 免得开机那几秒「卡在、卡表还没装好」把正常卡判灰。一旦确证，靠粘性
+                // 一直保持，直到某张卡重新出现在卡表里。
+                if (active.isEmpty() && insertedCount > 0) {
+                    sAllInactiveStreak++
+                } else {
+                    sAllInactiveStreak = 0
+                }
+                val allInactiveConfirmed = active.isEmpty() && insertedCount > 0 &&
+                    sAllInactiveStreak >= 2
+                val prevPresent = sSlotPresent
+                val prevDisabled = sSlotDisabled
+                for (slot in 0 until SIM_SLOTS) {
+                    present[slot] = inserted[slot] || activeSlots[slot] ||
+                        (states[slot] == TelephonyManager.SIM_STATE_UNKNOWN &&
+                            prevPresent.getOrNull(slot) == true)
+                    val absentFromActive = evidence && !activeSlots[slot] && inserted[slot]
+                    if (absentFromActive) {
+                        sSlotAbsentStreak[slot]++
+                    } else {
+                        sSlotAbsentStreak[slot] = 0
+                    }
+                    disabled[slot] = when {
+                        !present[slot] -> false
+                        activeSlots[slot] -> uicc[slot] == 0 && crossCheckTrue
+                        allInactiveConfirmed && inserted[slot] -> true
+                        absentFromActive && sSlotAbsentStreak[slot] >= 2 -> true
+                        else -> prevDisabled.getOrNull(slot) == true
+                    }
+                }
+                // 每张卡自己的历史读数：停用/读不到的帧不清零，供下次缺读数时借用。
+                // 停用排保留位置与行高，整排用轨道色：读数置 0，既不会误点亮，
+                // 也不会被当成「这一格没读数」而整排消失。制式在调用侧留空。
+                val last = sSlotLastLevels
+                val nextLast = intArrayOf(-1, -1)
+                for (slot in 0 until SIM_SLOTS) {
+                    val prevLast = last.getOrNull(slot) ?: -1
+                    nextLast[slot] = if (!disabled[slot] && levels[slot] >= 0) {
+                        levels[slot]
+                    } else {
+                        prevLast
+                    }
+                    if (disabled[slot]) levels[slot] = 0
+                }
                 // The aggregate reading comes from the data subscription rather than from
-                // the icon that happens to carry it.
-                if (dataSlot in 0 until SIM_SLOTS && levels[dataSlot] >= 0) {
+                // the icon that happens to carry it. 停用卡的 0 不参与汇总。
+                if (dataSlot in 0 until SIM_SLOTS && !disabled[dataSlot] && levels[dataSlot] >= 0) {
                     sMobileLevel = levels[dataSlot]
                 }
+                lastNext = nextLast
             } catch (_: Throwable) {
                 // keep whatever the previous poll found.
-                return
+                return false
             }
+            // 变化才返回 true，采样器据此决定要不要重画：没变化就不刷状态栏。
+            val lastPub = lastNext ?: sSlotLastLevels
+            val changed = !sSlotPolled ||
+                sDataSlot != dataSlot ||
+                !sSlotLevels.contentEquals(levels) ||
+                !sSlotPresent.contentEquals(present) ||
+                !sSlotDisabled.contentEquals(disabled) ||
+                !sSlotLastLevels.contentEquals(lastPub)
             // Published only once the whole reading is consistent, so a frame never
             // pairs SIM 1's level with SIM 2's from a different poll.
             sSlotLevels = levels
             sSlotPresent = present
+            sSlotDisabled = disabled
+            sSlotLastLevels = lastPub
             sDataSlot = dataSlot
             sSlotPolled = true
+            return changed
+        }
+
+        /**
+         * 卡槽的原始 SIM 状态，只在 2 秒采样里调用，不参与任何绘制路径。
+         *
+         * 读不到时返回 UNKNOWN：这是「未知」，不是「没卡」，更不是「停用」。
+         */
+        private fun simState(tel: TelephonyManager, slot: Int): Int = try {
+            tel.getSimState(slot)
+        } catch (_: Throwable) {
+            TelephonyManager.SIM_STATE_UNKNOWN
+        }
+
+        /**
+         * `SubscriptionInfo#areUiccApplicationsEnabled()`：1 启用，0 停用，-1 读不到。
+         *
+         * 只在采样线程调用，Method 只解析一次。这个值单独不可信（1.1.12 里正常卡也会
+         * 返回 false，那批全灰就是这么来的），调用侧用 `crossCheckTrue` 兜住：只有当
+         * 至少一张卡明确报启用时，才采信另一张的 false。
+         */
+        private fun uiccEnabled(info: SubscriptionInfo): Int {
+            if (!uiccTried) {
+                uiccTried = true
+                uiccMethod = try {
+                    SubscriptionInfo::class.java.getMethod("areUiccApplicationsEnabled")
+                } catch (_: Throwable) {
+                    null
+                }
+            }
+            val method = uiccMethod ?: return -1
+            return try {
+                if (method.invoke(info) as? Boolean == true) 1 else 0
+            } catch (_: Throwable) {
+                -1
+            }
         }
 
         /**
@@ -1037,6 +1259,59 @@ internal class TrioState(val host: View) {
         }
 
         private const val DATA_ACTIVITY_POLL_MS = 1000L
+
+        /** 卡状态广播的去抖窗口：同一轮停用/切换会连发好几个动作，合并成一次采样。 */
+        private const val SIMS_EVENT_DEBOUNCE_MS = 500L
+
+        private var sSimStateStarted = false
+        private var sSimEventPending = false
+        private val sSimEventHandler = Handler(Looper.getMainLooper())
+        private val sSimEventRefresh = Runnable {
+            sSimEventPending = false
+            // 熄屏不采样：亮屏时 ensureSimSampler 会立刻补一次。
+            if (!ScreenStateTracker.isScreenOn) return@Runnable
+            // 采样与重绘都只在这里发生一次：绘制路径永远不去补采。
+            sampleSims(appContext())
+            TrioHooks.invalidateHosts()
+        }
+
+        /**
+         * 卡状态广播：停用/启用、拔插、切默认卡、飞行模式。
+         *
+         * 回调本身只置脏并合并 500ms 内的连续动作；真正的一次采样与一次重绘由去抖后的
+         * runnable 完成。2 秒采样保留作兜底，系统界面不重启。
+         */
+        private fun startSimStateListener(context: Context) {
+            if (sSimStateStarted) return
+            try {
+                val filter = IntentFilter().apply {
+                    // 拔插卡与卡就绪
+                    addAction("android.intent.action.SIM_STATE_CHANGED")
+                    // 卡的启用状态变化：设置里停用/启用 SIM 时发出
+                    addAction("android.telephony.action.SIM_CARD_STATE_CHANGED")
+                    addAction("android.telephony.action.SIM_APPLICATIONS_UPDATED")
+                    // 切默认卡 / 默认数据卡
+                    addAction("android.telephony.action.DEFAULT_SUBSCRIPTION_CHANGED")
+                    addAction("android.telephony.action.DEFAULT_DATA_SUBSCRIPTION_CHANGED")
+                    // 飞行模式
+                    addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED)
+                }
+                val receiver = object : BroadcastReceiver() {
+                    override fun onReceive(c: Context?, intent: Intent?) {
+                        // 只置脏并合并；不在这里采样，也不在这里重绘。
+                        if (sSimEventPending) return
+                        sSimEventPending = true
+                        sSimEventHandler.postDelayed(sSimEventRefresh, SIMS_EVENT_DEBOUNCE_MS)
+                    }
+                }
+                ContextCompat.registerReceiver(
+                    context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+                sSimStateStarted = true
+            } catch (_: Throwable) {
+                // 注册失败就退回 2 秒采样，状态仍会更新，只是慢一拍。
+            }
+        }
 
         private fun startDataActivityListener(context: Context) {
             if (sDataActivityStarted) return

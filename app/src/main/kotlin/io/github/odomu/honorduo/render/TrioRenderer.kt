@@ -559,9 +559,18 @@ object TrioRenderer {
                     val baseDotR = TrioGeometry.arcRowDotR(z, a.ringStroke, width, a.dotScaleFactor())
 
                     val dataSlot = TrioState.sDataSlot
-                    val dataLevel = if (levels != null && dataSlot in levels.indices && levels[dataSlot] >= 0) levels[dataSlot] else mobileLevel
-                    val sim1Level = if (levels != null && levels.isNotEmpty() && levels[0] >= 0) levels[0] else mobileLevel
-                    val sim2Level = if (levels != null && levels.size > 1 && levels[1] >= 0) levels[1] else mobileLevel
+                    // 停用的卡槽整排用轨道色：读数直接按 0 画，不借别的卡的读数。
+                    // 但没有停用、只是这一格读数暂时取不到时，退回总信号正常显示——
+                    // 「读不到」不能当「停用」，否则正常使用也会整排灰。
+                    val dataLevel = if (TrioState.slotDisabled(dataSlot)) 0
+                    else if (levels != null && dataSlot in levels.indices && levels[dataSlot] >= 0) levels[dataSlot]
+                    else mobileLevel
+                    val sim1Level = if (TrioState.slotDisabled(0)) 0
+                    else if (levels != null && levels.isNotEmpty() && levels[0] >= 0) levels[0]
+                    else mobileLevel
+                    val sim2Level = if (TrioState.slotDisabled(1)) 0
+                    else if (levels != null && levels.size > 1 && levels[1] >= 0) levels[1]
+                    else mobileLevel
 
                     val isStackedDual = !a.dataSimOnly && chain != null && (
                         (chain.contains(Prefs.PART_SIM_1) && chain.contains(Prefs.PART_SIM_2)) ||
@@ -579,10 +588,16 @@ object TrioRenderer {
                     if (isStackedDual) {
                         val firstPart = chain?.firstOrNull { p -> p == Prefs.PART_SIM_1 || p == Prefs.PART_SIM_2 || p == Prefs.PART_MOBILE }
                         val isSim2First = firstPart == Prefs.PART_SIM_2
+                        val firstSlot = if (isSim2First) 1 else 0
+                        val secondSlot = if (isSim2First) 0 else 1
                         val l1 = if (isSim2First) sim2Level else sim1Level
                         val l2 = if (isSim2First) sim1Level else sim2Level
                         val active1 = if (l1 < 0) 0 else min(columns, l1)
                         val active2 = if (l2 < 0) 0 else min(columns, l2)
+                        // 闸门是「在位或停用」：停用的卡照样占一排，只是整排轨道色；
+                        // 真正拔掉的卡不留一排空点，两排都拔掉时这里留白。
+                        val want1 = TrioState.slotPresent(firstSlot) || TrioState.slotDisabled(firstSlot)
+                        val want2 = TrioState.slotPresent(secondSlot) || TrioState.slotDisabled(secondSlot)
 
                         val inward = 3.8f
                         val r1 = rhoMid - inward
@@ -591,22 +606,26 @@ object TrioRenderer {
                         val halfSpanAngle = Math.toRadians(24.5).toFloat()
 
                         // Row 1: Order 1 (shifted inward for comfortable spacing)
-                        for (dot in 0 until columns) {
-                            val t = (dot - halfDiv) / halfDiv
-                            val angle = t * halfSpanAngle
-                            val x = r1 * kotlin.math.sin(angle)
-                            val y = (TrioGeometry.B_CY + sign * r1 * kotlin.math.cos(angle)) - TrioGeometry.ZONE_CY[z]
-                            FILL.color = if (dot < active1) fg else inactive
-                            c.drawCircle(x, y, dotR, FILL)
+                        if (want1) {
+                            for (dot in 0 until columns) {
+                                val t = (dot - halfDiv) / halfDiv
+                                val angle = t * halfSpanAngle
+                                val x = r1 * kotlin.math.sin(angle)
+                                val y = (TrioGeometry.B_CY + sign * r1 * kotlin.math.cos(angle)) - TrioGeometry.ZONE_CY[z]
+                                FILL.color = if (dot < active1) fg else inactive
+                                c.drawCircle(x, y, dotR, FILL)
+                            }
                         }
                         // Row 2: Order 2 (parallel outside row 1)
-                        for (dot in 0 until columns) {
-                            val t = (dot - halfDiv) / halfDiv
-                            val angle = t * halfSpanAngle
-                            val x = r2 * kotlin.math.sin(angle)
-                            val y = (TrioGeometry.B_CY + sign * r2 * kotlin.math.cos(angle)) - TrioGeometry.ZONE_CY[z]
-                            FILL.color = if (dot < active2) fg else inactive
-                            c.drawCircle(x, y, dotR, FILL)
+                        if (want2) {
+                            for (dot in 0 until columns) {
+                                val t = (dot - halfDiv) / halfDiv
+                                val angle = t * halfSpanAngle
+                                val x = r2 * kotlin.math.sin(angle)
+                                val y = (TrioGeometry.B_CY + sign * r2 * kotlin.math.cos(angle)) - TrioGeometry.ZONE_CY[z]
+                                FILL.color = if (dot < active2) fg else inactive
+                                c.drawCircle(x, y, dotR, FILL)
+                            }
                         }
                     } else {
                         val rowLevel = if (a.dataSimOnly) dataLevel else when (part) {
@@ -651,13 +670,19 @@ object TrioRenderer {
         if (r.hasLeftDots || r.hasRightDots) {
             val columns = a.signalColumns.coerceIn(4, 5)
             val dataSlot = TrioState.sDataSlot
-            val dataLevel = if (levels != null && dataSlot in levels.indices && levels[dataSlot] >= 0) {
+            val dataLevel = if (TrioState.slotDisabled(dataSlot)) {
+                0
+            } else if (levels != null && dataSlot in levels.indices && levels[dataSlot] >= 0) {
                 levels[dataSlot]
             } else {
                 mobileLevel
             }
-            val sim1Level = if (levels != null && levels.isNotEmpty() && levels[0] >= 0) levels[0] else mobileLevel
-            val sim2Level = if (levels != null && levels.size > 1 && levels[1] >= 0) levels[1] else mobileLevel
+            val sim1Level = if (TrioState.slotDisabled(0)) 0
+            else if (levels != null && levels.isNotEmpty() && levels[0] >= 0) levels[0]
+            else mobileLevel
+            val sim2Level = if (TrioState.slotDisabled(1)) 0
+            else if (levels != null && levels.size > 1 && levels[1] >= 0) levels[1]
+            else mobileLevel
             val dotR = TrioGeometry.flankDotR(columns, a.dotScaleFactor())
             val inactive = withAlpha(fg, a.trackAlpha)
             val rho = TrioGeometry.B_R
@@ -1026,7 +1051,7 @@ object TrioRenderer {
         }
 
         if (cap.dots) {
-            drawCapsuleDots(canvas, mobileLevel, slotLevels, cap.dual, fg, a, cap, left, right, wifiLevel)
+            drawCapsuleDots(canvas, mobileLevel, slotLevels, fg, a, cap, left, right, wifiLevel)
         }
 
         // 胶囊两端是半圆端：只放行 Wi-Fi 弧。
@@ -1584,20 +1609,16 @@ object TrioRenderer {
      * side only reads as damage rather than as a row between two segments.
      */
     private fun drawCapsuleDots(
-        c: Canvas, level: Int, slotLevels: IntArray?, dual: Boolean,
+        c: Canvas, level: Int, slotLevels: IntArray?,
         fg: Int, a: TrioAppearance, cap: TrioAppearance.Capsule?, left: Float, right: Float,
         wifiLevel: Int,
     ) {
         val dataSlot = TrioState.sDataSlot
         val dataLevel = if (slotLevels != null && dataSlot in slotLevels.indices && slotLevels[dataSlot] >= 0) slotLevels[dataSlot] else level
-        val top = if (a.dataSimOnly) dataLevel else if (dual && slotLevels != null) slotLevels[0] else level
-        val bottom = if (a.dataSimOnly) -1 else if (dual && slotLevels != null) slotLevels[1] else level
         val topRow = cap == null || cap.dotsIn(TrioZones.Zone.TOP)
         val bottomRow = !a.dataSimOnly && (cap == null || cap.dotsIn(TrioZones.Zone.BOTTOM))
         val inactive = withAlpha(fg, a.trackAlpha)
         val columns = a.signalColumns.coerceIn(4, 5)
-        val topActive = if (top < 0) 0 else min(columns, top)
-        val bottomActive = if (bottom < 0) 0 else min(columns, bottom)
         val topY = TrioGeometry.capDotTopY()
         val bottomY = TrioGeometry.capDotBottomY()
         val pitch = if (columns == 5) TrioGeometry.CAP_DOT_PITCH * 0.82f else TrioGeometry.CAP_DOT_PITCH
@@ -1613,17 +1634,21 @@ object TrioRenderer {
         // 每张卡用自己那一格的读数；取不到时才退回图标给出的总信号。
         val raw0 = slotLevels?.getOrNull(0) ?: -1
         val raw1 = slotLevels?.getOrNull(1) ?: -1
-        val l0 = if (raw0 >= 0) raw0 else level
-        val l1 = if (raw1 >= 0) raw1 else l0
+        // 停用排整排轨道色；没有停用而只是读数暂时取不到时退回总信号，不能灰。
+        val l0 = if (TrioState.slotDisabled(0)) 0 else if (raw0 >= 0) raw0 else level
+        val l1 = if (TrioState.slotDisabled(1)) 0 else if (raw1 >= 0) raw1 else level
         for (band in 0 until 2) {
             val isTop = band == 0
             if (if (isTop) !topRow else !bottomRow) continue
             val y = if (isTop) topY else bottomY
             if (if (isTop) stackedTop else stackedBottom) {
                 // 每一排的闸门有三道：卡开关、是否双卡、以及这张卡是否真的在卡槽里。
-                // 拔掉的卡不留一排空点，两排都没有卡时整格空白。
-                val want1 = a.showSim1 && TrioState.slotPresent(0)
-                val want2 = a.showSim2 && TrioState.slotPresent(1)
+                // 闸门是「在位或停用」：停用的卡照样占一排，画成整排轨道色；
+                // 真正拔掉的卡不留一排空点，两排都没有卡时整格空白。
+                val want1 = a.showSim1 &&
+                    (TrioState.slotPresent(0) || TrioState.slotDisabled(0))
+                val want2 = a.showSim2 &&
+                    (TrioState.slotPresent(1) || TrioState.slotDisabled(1))
                 if (!want1 && !want2) {
                     // 两张卡都判成不在：状态栏自己还挂着总信号时退回一排总信号，
                     // 免得一次读卡失败就把整格画空；总信号也没有才真的留白。
@@ -1664,22 +1689,31 @@ object TrioRenderer {
                     }
                 }
             } else {
-                // 单排开口也按卡在位判断：这一格放的是哪张卡，卡不在就不画这一排。
+                // 单排开口也按「在位或停用」判断：停用的卡保留这一排（轨道色），
+                // 真正拔掉的卡才不画。
                 val part = a.ringZones.getOrNull(band)?.firstOrNull {
                     it == Prefs.PART_SIM_1 || it == Prefs.PART_SIM_2 || it == Prefs.PART_MOBILE
                 }
-                if (part == Prefs.PART_SIM_1 && !TrioState.slotPresent(0)) continue
-                if (part == Prefs.PART_SIM_2 && !TrioState.slotPresent(1)) continue
+                if (part == Prefs.PART_SIM_1 &&
+                    !(TrioState.slotPresent(0) || TrioState.slotDisabled(0))
+                ) continue
+                if (part == Prefs.PART_SIM_2 &&
+                    !(TrioState.slotPresent(1) || TrioState.slotDisabled(1))
+                ) continue
+                // 读数按这一格放的卡（而非上下位置）取：卡 2 放在上开口时用卡 2 自己的
+                // 读数，停用则整排轨道色，绝不会借用另一张卡的读数。
+                val partLevel = when (part) {
+                    Prefs.PART_SIM_1 -> if (TrioState.slotDisabled(0)) 0
+                    else (slotLevels?.getOrNull(0)?.takeIf { it >= 0 } ?: level)
+                    Prefs.PART_SIM_2 -> if (TrioState.slotDisabled(1)) 0
+                    else (slotLevels?.getOrNull(1)?.takeIf { it >= 0 } ?: level)
+                    else -> if (TrioState.slotDisabled(dataSlot)) 0 else dataLevel
+                }
+                val partActive = if (partLevel < 0) 0 else min(columns, partLevel)
                 for (i in 0 until columns) {
                     val x = first + i * pitch
-                    if (isTop) {
-                        FILL.color = if (i < topActive) fg else inactive
-                        c.drawCircle(x, y, dotR, FILL)
-                    }
-                    if (!isTop) {
-                        FILL.color = if (i < bottomActive) fg else inactive
-                        c.drawCircle(x, y, dotR, FILL)
-                    }
+                    FILL.color = if (i < partActive) fg else inactive
+                    c.drawCircle(x, y, dotR, FILL)
                 }
             }
         }
@@ -1690,15 +1724,21 @@ object TrioRenderer {
         if (leftFlank || rightFlank) {
             val capCy = (TrioGeometry.CAP_TOP + TrioGeometry.CAP_BOTTOM) * 0.5f
             val capR = TrioGeometry.CAP_RADIUS
-            val sim1Level = if (slotLevels != null && slotLevels.isNotEmpty() && slotLevels[0] >= 0) {
+            // 停用排整排轨道色；读数暂时取不到（权限/开机瞬态）时退回总信号，
+            // 信息缺失不是停用，不能把端部珠行也画灰。
+            val sim1Level = if (TrioState.slotDisabled(0)) {
+                0
+            } else if (slotLevels != null && slotLevels.isNotEmpty() && slotLevels[0] >= 0) {
                 slotLevels[0]
             } else {
-                dataLevel
+                level
             }
-            val sim2Level = if (slotLevels != null && slotLevels.size > 1 && slotLevels[1] >= 0) {
+            val sim2Level = if (TrioState.slotDisabled(1)) {
+                0
+            } else if (slotLevels != null && slotLevels.size > 1 && slotLevels[1] >= 0) {
                 slotLevels[1]
             } else {
-                dataLevel
+                level
             }
             val halfDiv = (columns - 1) * 0.5f
             val arcHalfAngle = Math.toRadians(55.0).toFloat()
@@ -3111,17 +3151,16 @@ object TrioRenderer {
      * Resolves the two readings the out-of-ring glyph draws: the capsule row, and
      * the dot row beneath it.
      *
-     * Row one is the first SIM that answered and row two the second, which is also
-     * why the dot row disappears when only one SIM answered. Four ascending bars is
-     * what a lone reading looks like, so a single SIM must not be split across two
-     * rows just to fill the space.
+     * Rows are bound to slots: with two cards present row one is slot 1 and row two
+     * is slot 2, and the dot row disappears when the second slot is not present.
+     * A card that is present but disabled still keeps its row, drawn as a full track.
      *
      * [dataSimOnly] collapses the pair the other way: the reading that matters is
      * the data SIM's, and the other one is dropped whether or not it answered.
      *
-     * When telephony never answered, the aggregate reading the glyph itself uses is
-     * the last resort, so a missing subscription list does not leave the out-of-ring
-     * glyph blank while the in-ring one still reads a level.
+     * When no per-slot reading could be read at all, the aggregate reading the glyph
+     * itself uses is the last resort, so a permission or boot transient does not turn
+     * a normally working signal row grey.
      *
      * @param out receives `{barLevel, dotLevel}`; a dot level of `-1` means "no
      *   second row", and a bar level of `-1` means "nothing to read"
@@ -3129,6 +3168,7 @@ object TrioRenderer {
     fun outSignalLevels(
         dataSimOnly: Boolean, mobileLevel: Int, slotLevels: IntArray?,
         dataSlot: Int, sims: Int, out: IntArray,
+        present: BooleanArray? = null, disabled: BooleanArray? = null,
     ) {
         var slot0 = -1
         var slot1 = -1
@@ -3136,26 +3176,49 @@ object TrioRenderer {
             slot0 = slotLevels[0]
             slot1 = slotLevels[1]
         }
-        val firstAnswered = if (slot0 >= 0) slot0 else slot1
-        var bars: Int
+        // 有卡状态时逐个卡槽判断，不再按「第几个有读数」隐式排序，也不再用总信号
+        // 顶替缺失的卡槽——后者正是两张卡永远都画两排的原因。
+        val p0 = present?.getOrNull(0) ?: (slot0 >= 0)
+        val p1 = present?.getOrNull(1) ?: (slot1 >= 0)
+        val dis0 = disabled?.getOrNull(0) == true
+        val dis1 = disabled?.getOrNull(1) == true
+        var bars = -1
         var dots = -1
+        // 单个卡槽的有效读数：停用固定 0（整排轨道色）；这一帧读不到该槽时退回
+        // 总信号。信息缺失（权限/服务/开机瞬态）不是停用，绝不能因此画灰。
+        fun levelFor(level: Int, isDisabled: Boolean): Int = when {
+            isDisabled -> 0
+            level >= 0 -> level
+            else -> mobileLevel
+        }
         if (dataSimOnly) {
-            bars = firstAnswered
-            if (dataSlot == 0 && slot0 >= 0) {
-                bars = slot0
-            } else if (dataSlot == 1 && slot1 >= 0) {
-                bars = slot1
+            val slot = when {
+                dataSlot == 0 && p0 -> 0
+                dataSlot == 1 && p1 -> 1
+                p0 -> 0
+                p1 -> 1
+                else -> -1
             }
-        } else if (slot0 >= 0 && sims >= 2) {
-            // The second card's row is drawn whenever that card exists, even unlit.
-            bars = slot0
-            dots = maxOf(0, slot1)
+            bars = when (slot) {
+                0 -> levelFor(slot0, dis0)
+                1 -> levelFor(slot1, dis1)
+                else -> -1
+            }
+        } else if (p0 && p1) {
+            // 两张卡都在位：两排都画。停用那一排是 0（整排轨道色），布局与行高不变。
+            bars = levelFor(slot0, dis0)
+            dots = levelFor(slot1, dis1)
         } else {
-            bars = firstAnswered
+            // 只插一张卡：只画它自己那一排，不拿总信号补另一排。
+            bars = when {
+                p0 -> levelFor(slot0, dis0)
+                p1 -> levelFor(slot1, dis1)
+                else -> -1
+            }
         }
-        if (bars < 0) {
-            bars = mobileLevel
-        }
+        // 没有任何卡状态可用时（预览等调用）保留旧的汇总兜底；状态栏调用总是带
+        // present，绝不会走到这里。
+        if (bars < 0 && present == null) bars = mobileLevel
         out[0] = bars
         out[1] = dots
     }

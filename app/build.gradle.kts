@@ -69,9 +69,9 @@ android {
         // 原生的日历跳转，开关拨到开启时先弹确认对话框说明「日历跳转不可用」，确认
         // 后才写入。1.1.12 的下拉卡顿修复（通知合并、最小间隔、查询回响静默、
         // 状态栏 sync 门控、日期行重算延迟与缓存）原样保留。
-        // versionCode 必须高于此前已构建的 168（1.1.11-test），避免设备上覆盖安装失败。
-        versionCode = tagVersionCode ?: 169
-        versionName = tagVersionName ?: "1.1.11"
+        // versionCode 必须高于此前已构建的 169（1.1.11），避免设备上覆盖安装失败。
+        versionCode = tagVersionCode ?: 170
+        versionName = tagVersionName ?: "1.1.12"
 
         buildConfigField("String", "REPO_SLUG", "\"$repoSlug\"")
     }

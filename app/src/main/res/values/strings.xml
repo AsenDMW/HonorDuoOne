@@ -177,13 +177,18 @@
     <string name="batch_close_all_empty">当前没有已开启的功能项</string>
     <string name="batch_close_all_locked">鸿蒙堆叠信号已开启，本模块整体停用中，无法批量关闭</string>
     <string name="batch_close_all_confirm_title">关闭全部已开启的功能？</string>
-    <string name="batch_close_all_confirm_summary">将关闭 %1$d 项已开启的功能，包括模块总开关——关完后本模块整体停用，状态栏全部恢复系统原生显示；各开关的开启状态都会被覆盖，之后需要手动重新开启。修改需重启系统界面后生效。</string>
+    <string name="batch_close_all_confirm_summary">将关闭 %1$d 项已开启的功能，包括模块总开关——关完后本模块整体停用，状态栏全部恢复系统原生显示。5 秒内可撤销；修改需重启系统界面后生效。</string>
     <string name="batch_close_all_action">全部关闭</string>
     <string name="enabled_items_title">已开启的功能项</string>
     <string name="enabled_items_summary">共 %1$d 项</string>
     <string name="enabled_items_empty">当前没有已开启的功能项</string>
     <string name="enabled_items_locked">鸿蒙堆叠信号已开启，本模块整体停用中；这里只能查看，无法关闭</string>
     <string name="enabled_items_close">关闭</string>
+    <string name="enabled_items_close_confirm_title">关闭「%1$s」？</string>
+    <string name="enabled_items_close_confirm_summary">只关闭这一项，5 秒内可撤销；需重启系统界面后生效。</string>
+    <string name="enabled_items_closed">已关闭「%1$s」</string>
+    <string name="batch_close_all_closed">已关闭 %1$d 项功能</string>
+    <string name="undo_action">撤销</string>
     <string name="master_title">启用三合一图标</string>
     <string name="merge_icons_summary">关闭后保留原生电池，组件自动外显</string>
 

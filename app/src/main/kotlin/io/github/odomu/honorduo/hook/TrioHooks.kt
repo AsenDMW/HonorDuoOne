@@ -110,6 +110,7 @@ internal object TrioHooks {
         FpsTicker.onConfigChanged()
         BatteryPresence.onConfigChanged()
         TrioState.ensureDataActivitySampler()
+        TrioState.ensureSimSampler()
     }
 
     fun ensureScreenStateTracker(context: Context) {
@@ -128,6 +129,8 @@ internal object TrioHooks {
         StatusBarIconManager.onScreenStateChanged(screenOn)
         if (screenOn) {
             TrioState.ensureDataActivitySampler()
+            // 熄屏时卡状态采样停摆，亮屏立刻恢复并读一次。
+            TrioState.ensureSimSampler()
             invalidateHosts()
             StatusBarIconManager.applyIconVisibility()
         }

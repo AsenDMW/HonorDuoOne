@@ -204,6 +204,8 @@ internal fun LazyListScope.drawingTab(
      * from turning into "the page may write anything".
      */
     snapshotForStyle: (Int) -> TrioSettings,
+    /** 关闭全部后的 5 秒撤销入口，由页面注入。 */
+    onUndo: (String, () -> Unit) -> Unit,
 ) {
     item {
         DrawingEditorCard(
@@ -212,6 +214,7 @@ internal fun LazyListScope.drawingTab(
             onEditColor = onEditColor,
             onResetColors = onResetColors,
             snapshotForStyle = snapshotForStyle,
+            onUndo = onUndo,
         )
     }
 }
@@ -231,6 +234,7 @@ private fun DrawingEditorCard(
     onEditColor: (RoleColor) -> Unit,
     onResetColors: () -> Unit,
     snapshotForStyle: (Int) -> TrioSettings,
+    onUndo: (String, () -> Unit) -> Unit,
 ) {
     // Which component's settings dialog is open, if any.
     var editing by remember { mutableStateOf<TrioSettingsPart?>(null) }
@@ -294,8 +298,8 @@ private fun DrawingEditorCard(
             ContentControlRow(ContentControl.AntiBurnIn, settings, update)
             // 模块生效范围：与上游一致，放在功能开关最后一行的位置。
             ContentControlRow(ContentControl.EffectiveScope, settings, update)
-            // 关闭全部已开启的功能项：动作行，点一下先确认，再逐项关闭。
-            CloseAllControl(settings, update)
+            // 关闭全部已开启的功能项：动作行，点一下先确认，再逐项关闭；关完可 5 秒撤销。
+            CloseAllControl(settings, update, onUndo)
         }
 
         DrawingSection(R.string.section_merge_style) {

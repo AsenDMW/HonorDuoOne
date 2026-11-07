@@ -24,7 +24,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
@@ -35,11 +37,12 @@ import io.github.odomu.honorduo.model.TrioSettings
 import io.github.odomu.honorduo.render.TrioZones
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 一个可以在「关闭全部」里被批量关掉的功能项。
@@ -132,7 +135,7 @@ internal fun enabledToggles(settings: TrioSettings): List<FeatureToggle> =
 /**
  * 排布页「功能开关」里的「关闭全部」入口。
  *
- * 是一个动作行而不是开关：点一下先弹确认（说明影响与不可逆），确认后才逐项写回关闭。
+ * 是一个动作行而不是开关：点一下先弹确认（说明影响与 5 秒撤销），确认后才逐项写回关闭。
  * 互斥项开着时整行置灰——那正是模块整体停用的状态，这时批量关闭只是改存储、不改变
  * 行为，不能给用户「点了就生效」的错觉。
  */
@@ -140,8 +143,10 @@ internal fun enabledToggles(settings: TrioSettings): List<FeatureToggle> =
 internal fun CloseAllControl(
     settings: TrioSettings,
     update: ((SettingsRepository) -> Unit) -> Unit,
+    onUndo: (String, () -> Unit) -> Unit,
 ) {
     var confirming by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val count = enabledToggles(settings).size
     val locked = settings.harmonyStacked
 
@@ -163,7 +168,15 @@ internal fun CloseAllControl(
             onDismiss = { confirming = false },
             onConfirm = {
                 confirming = false
-                update { repo -> enabledToggles(settings).forEach { it.turnOff(repo) } }
+                val toggles = enabledToggles(settings)
+                var snapshot: Map<String, *>? = null
+                update { repo ->
+                    snapshot = repo.capturePrefs()
+                    toggles.forEach { it.turnOff(repo) }
+                }
+                onUndo(context.getString(R.string.batch_close_all_closed, toggles.size)) {
+                    snapshot?.let { saved -> update { repo -> repo.restorePrefs(saved) } }
+                }
             },
         )
     }
@@ -210,25 +223,31 @@ internal fun BatchDisableConfirm(
 /**
  * 关于页「已开启显示项」点进来的清单。
  *
- * 只列当前为开的项，每一项都能单独关掉；底部还有一个「全部关闭」，走同一个确认框。
- * 互斥项开启时整页只读：行置灰、全部关闭不可点，但依然能看清当时开着哪些——
- * 这也是「别出现绕过闸门的入口」的落点。
+ * 只列当前为开的项。每一行只有右侧开关能关：点标题或行的空白处不会触发任何动作，
+ * 避免误触；拨动开关先弹确认框，确认后才写回。互斥项开启时整页只读：行置灰、
+ * 全部关闭不可点，但依然能看清当时开着哪些。
+ *
+ * [onUndo] 由页面注入：关闭生效后给出 5 秒撤销入口，撤销按关闭前的整份快照回写，
+ * 互斥开关与布局键一并还原。
  */
 @Composable
 internal fun EnabledItemsSheet(
     settings: TrioSettings,
     update: ((SettingsRepository) -> Unit) -> Unit,
+    onUndo: (String, () -> Unit) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val locked = settings.harmonyStacked
     val items = enabledToggles(settings)
+    val context = LocalContext.current
     var confirming by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<FeatureToggle?>(null) }
     val windowHeight = with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.height.toDp()
     }
 
     OverlayDialog(
-        show = !confirming,
+        show = !confirming && pending == null,
         title = stringResource(R.string.enabled_items_title),
         summary = stringResource(R.string.enabled_items_summary, items.size),
         onDismissRequest = onDismiss,
@@ -249,18 +268,11 @@ internal fun EnabledItemsSheet(
                 if (items.isEmpty()) {
                     Text(text = stringResource(R.string.enabled_items_empty))
                 }
-                // 行显示为「开」但不可再打开：这里的动作只有关闭，所以把开关画成常开、
-                // 只处理被拨到关的那一下；这样它和排布页的同一项行为一致。
                 items.forEach { toggle ->
-                    SwitchPreference(
-                        checked = true,
-                        title = stringResource(toggle.titleRes),
-                        summary = null,
-                        insideMargin = SettingsItemMargin,
-                        enabled = !locked,
-                        onCheckedChange = { on ->
-                            if (!on) update { repo -> toggle.turnOff(repo) }
-                        },
+                    EnabledItemRow(
+                        toggle = toggle,
+                        locked = locked,
+                        onSwitchOff = { pending = toggle },
                     )
                 }
             }
@@ -285,14 +297,117 @@ internal fun EnabledItemsSheet(
         }
     }
 
+    val target = pending
+    if (target != null) {
+        SingleDisableConfirm(
+            title = stringResource(
+                R.string.enabled_items_close_confirm_title,
+                stringResource(target.titleRes),
+            ),
+            onDismiss = { pending = null },
+            onConfirm = {
+                pending = null
+                var snapshot: Map<String, *>? = null
+                update { repo ->
+                    snapshot = repo.capturePrefs()
+                    target.turnOff(repo)
+                }
+                // 清单让位给撤销提示：提示画在页面层，弹层留着会把它盖住。
+                onDismiss()
+                onUndo(context.getString(R.string.enabled_items_closed, context.getString(target.titleRes))) {
+                    snapshot?.let { saved -> update { repo -> repo.restorePrefs(saved) } }
+                }
+            },
+        )
+    }
+
     if (confirming) {
         BatchDisableConfirm(
             count = items.size,
             onDismiss = { confirming = false },
             onConfirm = {
                 confirming = false
-                update { repo -> items.forEach { it.turnOff(repo) } }
+                var snapshot: Map<String, *>? = null
+                update { repo ->
+                    snapshot = repo.capturePrefs()
+                    items.forEach { it.turnOff(repo) }
+                }
+                onDismiss()
+                onUndo(context.getString(R.string.batch_close_all_closed, items.size)) {
+                    snapshot?.let { saved -> update { repo -> repo.restorePrefs(saved) } }
+                }
             },
+        )
+    }
+}
+
+/**
+ * 单项关闭前的确认框。与批量确认同一套写法，只换标题与说明：
+ * 强调只关这一项、5 秒内可撤销。
+ */
+@Composable
+private fun SingleDisableConfirm(
+    title: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    OverlayDialog(
+        show = true,
+        title = title,
+        summary = stringResource(R.string.enabled_items_close_confirm_summary),
+        onDismissRequest = onDismiss,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            TextButton(
+                text = stringResource(R.string.cancel),
+                onClick = onDismiss,
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColorsPrimary(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(stringResource(R.string.enabled_items_close))
+            }
+        }
+    }
+}
+
+/**
+ * 清单里的一行：标题只负责显示，右侧开关是唯一的关闭入口。
+ *
+ * 不用 SwitchPreference 正是因为它把整行都做成可点，点文字就会关；
+ * 这里把开关独立出来，标题不带任何点击。
+ */
+@Composable
+private fun EnabledItemRow(
+    toggle: FeatureToggle,
+    locked: Boolean,
+    onSwitchOff: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(SettingsItemMargin),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(toggle.titleRes),
+            style = MiuixTheme.textStyles.body1,
+            color = if (locked) {
+                MiuixTheme.colorScheme.onSurfaceVariantSummary
+            } else {
+                MiuixTheme.colorScheme.onSurface
+            },
+            modifier = Modifier.weight(1f),
+        )
+        Switch(
+            checked = true,
+            onCheckedChange = { on -> if (!on) onSwitchOff() },
+            enabled = !locked,
+            modifier = Modifier.padding(start = 12.dp),
         )
     }
 }

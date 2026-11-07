@@ -157,6 +157,7 @@ import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.SnackbarDuration
 import top.yukonga.miuix.kmp.basic.SnackbarHost
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
+import top.yukonga.miuix.kmp.basic.SnackbarResult
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
@@ -358,6 +359,22 @@ fun SettingsScreen(repository: SettingsRepository) {
         { message ->
             scope.launch {
                 snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
+            }
+        }
+    }
+
+    // 关闭功能项后的撤销提示：带「撤销」动作，5 秒后自然消失。用 Custom 而不是
+    // Long——Long 是 10 秒，超出这里约定的时限。
+    val undoContext = LocalContext.current
+    val showUndo: (String, () -> Unit) -> Unit = remember(scope, snackbarHostState, undoContext) {
+        { message, undo ->
+            scope.launch {
+                val result = snackbarHostState.showSnackbar(
+                    message = message,
+                    actionLabel = undoContext.getString(R.string.undo_action),
+                    duration = SnackbarDuration.Custom(5000L),
+                )
+                if (result == SnackbarResult.ActionPerformed) undo()
             }
         }
     }
@@ -609,6 +626,7 @@ fun SettingsScreen(repository: SettingsRepository) {
                                     onEditColor = { role -> editing = role },
                                     onResetColors = { resettingColors = true },
                                     snapshotForStyle = { style -> repository.readForStyle(style) },
+                                    onUndo = showUndo,
                                 )
 
                                 SettingsTab.Settings -> settingsTab(
@@ -648,6 +666,7 @@ fun SettingsScreen(repository: SettingsRepository) {
                                         },
                                         onImportBackup = { importLauncher.launch(arrayOf("application/json", "*/*")) },
                                         onOpenDiagnostics = { diagnosticsOpen = true },
+                                        onUndo = showUndo,
                                     ) { block -> update(block) }
                                 }
                             }
@@ -1834,9 +1853,12 @@ private fun LazyListScope.aboutTab(
     onExportBackup: () -> Unit,
     onImportBackup: () -> Unit,
     onOpenDiagnostics: () -> Unit,
+    onUndo: (String, () -> Unit) -> Unit,
     update: ((SettingsRepository) -> Unit) -> Unit,
 ) {
-    item { ActivatedRow(settings = settings, service = service, update = update) }
+    item {
+        ActivatedRow(settings = settings, service = service, update = update, onUndo = onUndo)
+    }
     item { InfoCard(service = service) }
     item { SectionTitle(stringResource(R.string.group_source)) }
     item {
@@ -2030,6 +2052,7 @@ private fun ActivatedRow(
     settings: TrioSettings,
     service: XposedService?,
     update: ((SettingsRepository) -> Unit) -> Unit,
+    onUndo: (String, () -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     val module = remember(context) { readModuleInfo(context) }
@@ -2072,6 +2095,7 @@ private fun ActivatedRow(
         EnabledItemsSheet(
             settings = settings,
             update = update,
+            onUndo = onUndo,
             onDismiss = { showEnabled = false },
         )
     }

@@ -125,13 +125,18 @@
     <string name="batch_close_all_empty">No features are currently enabled</string>
     <string name="batch_close_all_locked">HarmonyOS stacked signal is on and this module is fully disabled, so batch closing is unavailable</string>
     <string name="batch_close_all_confirm_title">Close all enabled features?</string>
-    <string name="batch_close_all_confirm_summary">This turns off %1$d enabled feature(s), including the module master switch: the whole module stops and the status bar returns to the system display. Each switch is overwritten and must be re-enabled by hand. Restart SystemUI for changes to take effect.</string>
+    <string name="batch_close_all_confirm_summary">This turns off %1$d enabled feature(s), including the module master switch: the whole module stops and the status bar returns to the system display. You can undo within 5 seconds. Restart SystemUI for changes to take effect.</string>
     <string name="batch_close_all_action">Close all</string>
     <string name="enabled_items_title">Enabled features</string>
     <string name="enabled_items_summary">%1$d in total</string>
     <string name="enabled_items_empty">No features are currently enabled</string>
     <string name="enabled_items_locked">HarmonyOS stacked signal is on and this module is fully disabled; the list is read-only here</string>
     <string name="enabled_items_close">Close</string>
+    <string name="enabled_items_close_confirm_title">Turn off “%1$s”?</string>
+    <string name="enabled_items_close_confirm_summary">This turns off only this item; you can undo within 5 seconds. Restart SystemUI for the change to take effect.</string>
+    <string name="enabled_items_closed">“%1$s” turned off</string>
+    <string name="batch_close_all_closed">%1$d feature(s) turned off</string>
+    <string name="undo_action">Undo</string>
     <string name="master_title">Enable trio glyph</string>
     <string name="merge_icons_summary">Turn off to show native battery with components outside</string>
 

@@ -757,4 +757,44 @@ class SettingsRepository(context: Context) {
         syncAllToFramework()
         return count
     }
+
+    /**
+     * 关闭功能项之前的本地设置快照，供 5 秒撤销使用。
+     *
+     * 撤销不能逐项「再打开」：一次关闭可能写到多个键（互斥开关、环内布局、制式标），
+     * 重新打开会把这些键落回默认值而不是关闭前的值。快照保留每一个键的原样。
+     */
+    fun capturePrefs(): Map<String, *> = preferences().all
+
+    /**
+     * 把 [capturePrefs] 的快照按差异写回本地与框架。
+     *
+     * 只回写与当前值不同的键：关闭动作改动的键全部还原，而这 5 秒里用户改的其它设置
+     * 不会被一并覆盖。本地一次 commit、框架一次推送，因此只广播一次。
+     */
+    fun restorePrefs(snapshot: Map<String, *>) {
+        val current = preferences().all
+        val changed = LinkedHashMap<String, Any>()
+        for ((key, value) in snapshot) {
+            if (value != null && current[key] != value) changed[key] = value
+        }
+        val removed = current.keys.filter { it !in snapshot }
+        if (changed.isEmpty() && removed.isEmpty()) return
+
+        val write: (SharedPreferences.Editor) -> Unit = { e ->
+            for ((key, value) in changed) {
+                when (value) {
+                    is Boolean -> e.putBoolean(key, value)
+                    is Int -> e.putInt(key, value)
+                    is Long -> e.putLong(key, value)
+                    is Float -> e.putFloat(key, value)
+                    is String -> e.putString(key, value)
+                    is Set<*> -> e.putStringSet(key, value.filterIsInstance<String>().toSet())
+                }
+            }
+            removed.forEach { e.remove(it) }
+        }
+        preferences().edit(commit = true) { write(this) }
+        push(write)
+    }
 }

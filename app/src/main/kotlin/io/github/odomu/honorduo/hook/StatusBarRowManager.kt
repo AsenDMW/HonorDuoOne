@@ -375,21 +375,29 @@ internal object StatusBarRowManager {
         TrioRenderer.outSignalLevels(
             a.dataSimOnly, row.state.mobileLevel,
             row.state.slotLevels, TrioState.sDataSlot, row.state.sims, reading,
+            TrioState.sSlotPresent, TrioState.sSlotDisabled,
         )
         // Each card's icon name states its level, even when telephony cannot answer.
+        // 停用卡与不在位的卡都不回填：原生图标名会把停用前的旧读数重新点亮。
         val native = nativeSlotLevels(row.container)
         if (native != null && native.size >= 2) {
             // "Data SIM only" still means one row: reading the cards must not quietly
             // undo it by putting the second card back.
             if (a.dataSimOnly) {
                 val slot = TrioState.sDataSlot
-                if (slot in native.indices) {
+                if (slot in native.indices &&
+                    TrioState.slotPresent(slot) && !TrioState.slotDisabled(slot)
+                ) {
                     reading[0] = native[slot]
                 }
                 reading[1] = -1
             } else {
-                reading[0] = native[0]
-                reading[1] = native[1]
+                if (TrioState.slotPresent(0) && !TrioState.slotDisabled(0)) {
+                    reading[0] = native[0]
+                }
+                if (TrioState.slotPresent(1) && !TrioState.slotDisabled(1)) {
+                    reading[1] = native[1]
+                }
             }
         }
         // Per-card types; an unanswered card borrows the sampled type so no label goes blank.
@@ -400,14 +408,29 @@ internal object StatusBarRowManager {
         val dataSlot = TrioState.sDataSlot.coerceIn(0, row.state.slotTypes.size - 1)
         val slots = row.state.slotLevels
         val dual = reading[1] >= 0
+        // 槽位与排一一绑定：双排时上排是卡 1、下排是卡 2，单排时就是那一张卡，
+        // 不按「第几个有读数」去猜。
         val firstSlot = when {
             a.dataSimOnly -> dataSlot
             dual -> 0
+            TrioState.slotPresent(1) && !TrioState.slotPresent(0) -> 1
             slots[0] >= 0 -> 0
+            TrioState.slotPresent(0) -> 0
             else -> dataSlot
         }
-        signal.type = row.state.slotTypes[firstSlot].ifEmpty { fallback }
-        signal.type2 = if (a.dataSimOnly || !dual) null else row.state.slotTypes[1].ifEmpty { fallback }
+        // 停用排不显示网络制式：留空，也不借用兜底的制式。
+        signal.type = if (TrioState.slotDisabled(firstSlot)) {
+            null
+        } else {
+            row.state.slotTypes[firstSlot].ifEmpty { fallback }
+        }
+        signal.type2 = if (a.dataSimOnly || !dual) {
+            null
+        } else if (TrioState.slotDisabled(1)) {
+            null
+        } else {
+            row.state.slotTypes[1].ifEmpty { fallback }
+        }
         signal.bars = max(0, reading[0])
         signal.dots = reading[1]
         var height = TrioRenderer.outSignalHeight(a, a.outSignalSize, density, dual)

@@ -459,6 +459,18 @@ class SettingsRepository(context: Context) {
     /** Pull-down morph - see [Prefs.KEY_TRIO_MORPH]. */
     fun setTrioMorph(value: Boolean) = writeBoolean(Prefs.KEY_TRIO_MORPH, value)
 
+    /**
+     * 下拉形变与「展开面板显示原生图标」互斥：开启形变时在同一次事务里关闭另一项，
+     * 两个键一起落本地与 remote preferences，避免只在一侧生效的中间态。关闭只写自己。
+     */
+    fun setTrioMorphExclusive(value: Boolean) {
+        if (value) {
+            writeBooleans(Prefs.KEY_TRIO_MORPH to true, Prefs.KEY_PANEL_NATIVE_ICONS to false)
+        } else {
+            writeBoolean(Prefs.KEY_TRIO_MORPH, false)
+        }
+    }
+
     /** Gap between the expanded morph row's icons - see [Prefs.KEY_TRIO_ROW_GAP]. */
     fun setTrioRowGap(value: Int) = writeInt(Prefs.KEY_TRIO_ROW_GAP, Prefs.resolveTrioRowGap(value))
 
@@ -498,6 +510,18 @@ class SettingsRepository(context: Context) {
 
     /** Native icons while the panel is expanded - see [Prefs.KEY_PANEL_NATIVE_ICONS]. */
     fun setPanelNativeIcons(value: Boolean) = writeBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, value)
+
+    /**
+     * 「展开面板显示原生图标」与下拉形变互斥：开启本项时在同一次事务里关闭形变，
+     * 两个键一起落本地与 remote preferences。关闭只写自己。
+     */
+    fun setPanelNativeIconsExclusive(value: Boolean) {
+        if (value) {
+            writeBooleans(Prefs.KEY_PANEL_NATIVE_ICONS to true, Prefs.KEY_TRIO_MORPH to false)
+        } else {
+            writeBoolean(Prefs.KEY_PANEL_NATIVE_ICONS, false)
+        }
+    }
 
     /** MagicOS 10 invert-color compensation - see [Prefs.KEY_MAGICOS10_INVERT]. */
     fun setMagicos10Invert(value: Boolean) = writeBoolean(Prefs.KEY_MAGICOS10_INVERT, value)

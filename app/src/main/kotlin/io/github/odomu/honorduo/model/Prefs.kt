@@ -1126,7 +1126,8 @@ object Prefs {
     /**
      * While the notification or control panel is expanded, hand the status-bar row
      * back to the native Wi-Fi / signal / battery icons; collapsing restores the
-     * glyph. Mutually exclusive with [KEY_TRIO_MORPH] - morph wins.
+     * glyph. Mutually exclusive with [KEY_TRIO_MORPH] - the panel hand-over wins,
+     * so the morph stays off while both are on.
      */
     const val KEY_PANEL_NATIVE_ICONS = "panel_native_icons"
     const val DEF_PANEL_NATIVE_ICONS = false

@@ -560,7 +560,7 @@
 
     <!-- Pull-down morph: the glyph becomes a row while the panel expands. -->
     <string name="trio_morph_title">下拉形变</string>
-    <string name="trio_morph_summary">展开通知栏或控制中心时，三合一平滑形变成横向排列的 Wi-Fi、电量药丸与信号柱；收起时复原。</string>
+    <string name="trio_morph_summary">展开通知栏或控制中心时，三合一平滑形变成横向排列的 Wi-Fi、电量药丸与信号柱；收起时复原。与「展开面板显示原生图标」只能选其一，开启其中一个会关闭另一个。</string>
     <string name="trio_row_gap_title">形变行间距</string>
     <string name="trio_row_gap_summary">展开后各图标之间的间距，0–16dp，默认 6dp。</string>
     <string name="trio_digit_size_title">形变数字大小</string>
@@ -590,7 +590,10 @@
     <string name="capsule_no_scale_title">胶囊禁止缩放</string>
     <string name="capsule_no_scale_summary">灵动胶囊驻留时阻止状态栏随之缩小，并以系统回弹动画复原。</string>
     <string name="panel_native_icons_title">展开面板显示原生图标</string>
-    <string name="panel_native_icons_summary">下拉展开通知栏或控制中心时交还系统原生 Wi-Fi/信号/电池图标，收起恢复三合一；与下拉形变互斥，形变优先。</string>
+    <string name="panel_native_icons_summary">下拉展开通知栏或控制中心时交还系统原生 Wi-Fi/信号/电池图标，收起恢复三合一；与「下拉形变」只能选其一，开启其中一个会关闭另一个。</string>
+    <string name="exclusive_switch_confirm_title">两者只能开一个</string>
+    <string name="exclusive_switch_confirm_summary">两者只能选其一。继续将关闭「%1$s」，并开启当前项。</string>
+    <string name="exclusive_switch_confirm_action">继续</string>
     <string name="magicos10_invert_title">MagicOS 10 反色兼容</string>
     <string name="magicos10_invert_summary">部分 MagicOS 10 设备状态栏对系统图标做反色处理。开启后字形颜色跟随反色，与原生图标保持一致。</string>
     <string name="group_backup">备份与恢复</string>

@@ -216,7 +216,8 @@ class TrioAppearance(c: TrioSettings) {
     /**
      * The pull-down morph is live this frame: the switch is on, the glyph is in a
      * morphable arrangement (ring or capsule), and the panel native-icons handover
-     * is off - the two are mutually exclusive, and morph wins.
+     * is off - the two are mutually exclusive, and the panel hand-over wins: with
+     * both switches on, the morph stays off.
      */
     @JvmField val morphLive: Boolean = trioMorph && !panelNativeIcons && slotted
 

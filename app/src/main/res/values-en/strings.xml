@@ -562,7 +562,7 @@
 
     <!-- Pull-down morph: the glyph becomes a row while the panel expands. -->
     <string name="trio_morph_title">Pull-down morph</string>
-    <string name="trio_morph_summary">While the notification or control panel expands, the glyph morphs into a horizontal row of Wi-Fi arcs, a battery pill and signal bars, and folds back as it closes.</string>
+    <string name="trio_morph_summary">While the notification or control panel expands, the glyph morphs into a horizontal row of Wi-Fi arcs, a battery pill and signal bars, and folds back as it closes. Only one of this and native icons while expanded can be on; turning one on turns the other off.</string>
     <string name="trio_row_gap_title">Morph row gap</string>
     <string name="trio_row_gap_summary">Gap between the expanded row\'s icons, 0–16dp, default 6.</string>
     <string name="trio_digit_size_title">Morph digit size</string>
@@ -592,7 +592,10 @@
     <string name="capsule_no_scale_title">Capsule no-scale</string>
     <string name="capsule_no_scale_summary">Stops the status bar from shrinking while the live capsule is docked, answering with the system\'s own bounce-back animation.</string>
     <string name="panel_native_icons_title">Native icons while expanded</string>
-    <string name="panel_native_icons_summary">Hands the row back to the native Wi-Fi / signal / battery icons while the panel is expanded, restoring the glyph on collapse. Mutually exclusive with pull-down morph; morph wins.</string>
+    <string name="panel_native_icons_summary">Hands the row back to the native Wi-Fi / signal / battery icons while the panel is expanded, restoring the glyph on collapse. Only one of this and pull-down morph can be on; turning one on turns the other off.</string>
+    <string name="exclusive_switch_confirm_title">Only one can be on</string>
+    <string name="exclusive_switch_confirm_summary">Only one can be on at a time. Continuing turns off \"%1$s\" and turns this one on.</string>
+    <string name="exclusive_switch_confirm_action">Continue</string>
     <string name="magicos10_invert_title">MagicOS 10 invert compat</string>
     <string name="magicos10_invert_summary">Some MagicOS 10 devices invert status bar icon colors. Enable to invert the glyph color along with the system icons.</string>
     <string name="group_backup">Backup &amp; Restore</string>

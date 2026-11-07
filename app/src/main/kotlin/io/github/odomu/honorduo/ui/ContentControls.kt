@@ -182,7 +182,8 @@ internal enum class ContentControl(val owner: TrioSettingsPart) {
      * Pull-down morph: the glyph becomes a horizontal row while the panel expands.
      *
      * A rule about the glyph as a whole rather than one piece, so it is owned by the
-     * appearance card. Mutually exclusive with [PanelNativeIcons] - morph wins.
+     * appearance card. Mutually exclusive with [PanelNativeIcons] - the panel
+     * hand-over wins, so this stays off while both are on.
      */
     TrioMorph(TrioSettingsPart.Appearance),
     /** Diagnostics toast when the morph flips state; only exists with [TrioMorph] on. */
@@ -805,12 +806,27 @@ private fun ContentControlRowBody(
         ) { next -> update { it.setTrioBtBattery(btBatteryMaskOf(next)) } }
         // The morph and the panel hand-off only exist for the slotted arrangements: the
         // rectangle has no ring or capsule to unfold from.
-        ContentControl.TrioMorph -> ContentToggle(
-            checked = settings.trioMorph,
-            title = R.string.trio_morph_title,
-            summaryRes = R.string.trio_morph_summary,
-            dependencies = master + listOf(a.slotted to R.string.trio_style_title),
-        ) { value -> update { it.setTrioMorph(value) } }
+        ContentControl.TrioMorph -> {
+            var confirming by remember { mutableStateOf(false) }
+            ContentToggle(
+                checked = settings.trioMorph,
+                title = R.string.trio_morph_title,
+                summaryRes = R.string.trio_morph_summary,
+                dependencies = master + listOf(a.slotted to R.string.trio_style_title),
+            ) { value ->
+                if (value && settings.panelNativeIcons) confirming = true
+                else update { it.setTrioMorphExclusive(value) }
+            }
+            MutuallyExclusiveConfirm(
+                show = confirming,
+                otherTitleRes = R.string.panel_native_icons_title,
+                onDismiss = { confirming = false },
+                onConfirm = {
+                    confirming = false
+                    update { it.setTrioMorphExclusive(true) }
+                },
+            )
+        }
         ContentControl.MorphToast -> ContentToggle(
             checked = settings.trioMorphToast,
             title = R.string.trio_morph_toast_title,
@@ -820,12 +836,27 @@ private fun ContentControlRowBody(
                 settings.trioMorph to R.string.trio_morph_title,
             ),
         ) { value -> update { it.setTrioMorphToast(value) } }
-        ContentControl.PanelNativeIcons -> ContentToggle(
-            checked = settings.panelNativeIcons,
-            title = R.string.panel_native_icons_title,
-            summaryRes = R.string.panel_native_icons_summary,
-            dependencies = master + listOf(a.slotted to R.string.trio_style_title),
-        ) { value -> update { it.setPanelNativeIcons(value) } }
+        ContentControl.PanelNativeIcons -> {
+            var confirming by remember { mutableStateOf(false) }
+            ContentToggle(
+                checked = settings.panelNativeIcons,
+                title = R.string.panel_native_icons_title,
+                summaryRes = R.string.panel_native_icons_summary,
+                dependencies = master + listOf(a.slotted to R.string.trio_style_title),
+            ) { value ->
+                if (value && settings.trioMorph) confirming = true
+                else update { it.setPanelNativeIconsExclusive(value) }
+            }
+            MutuallyExclusiveConfirm(
+                show = confirming,
+                otherTitleRes = R.string.trio_morph_title,
+                onDismiss = { confirming = false },
+                onConfirm = {
+                    confirming = false
+                    update { it.setPanelNativeIconsExclusive(true) }
+                },
+            )
+        }
         ContentControl.Magicos10Invert -> ContentToggle(
             checked = settings.magicos10Invert,
             title = R.string.magicos10_invert_title,
@@ -864,6 +895,47 @@ private fun ContentControlRowBody(
             dependencies = listOf(settings.enabled to R.string.master_module_title),
             minimumSelected = 1,
         ) { next -> update { it.setEffectiveScope(scopeMaskOf(next)) } }
+    }
+}
+
+/**
+ * 两个互斥开关共用的一份确认：说明继续会关掉另一项，确认后两个键一次写入。
+ *
+ * 取消不做任何写入，开关仍由设置值驱动，因此会保持关闭。
+ */
+@Composable
+private fun MutuallyExclusiveConfirm(
+    show: Boolean,
+    otherTitleRes: Int,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    OverlayDialog(
+        show = show,
+        title = stringResource(R.string.exclusive_switch_confirm_title),
+        summary = stringResource(
+            R.string.exclusive_switch_confirm_summary,
+            stringResource(otherTitleRes),
+        ),
+        onDismissRequest = onDismiss,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            TextButton(
+                text = stringResource(R.string.cancel),
+                onClick = onDismiss,
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColorsPrimary(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(stringResource(R.string.exclusive_switch_confirm_action))
+            }
+        }
     }
 }
 
